@@ -9,7 +9,7 @@ replay. It is split across three repositories that release independently:
 
 | Repository | What it is | Licence |
 |---|---|---|
-| [sightpane/sightpane](https://github.com/sightpane/sightpane) | Go backend on Fiber v3 + SQLite, the Docker deployment, the product roadmap under `future-todo-files/` | AGPL-3.0-or-later |
+| [sightpane/sightpane](https://github.com/sightpane/sightpane) | Go backend on Fiber v3 + TimescaleDB, the Docker deployment, the product roadmap under `future-todo-files/` | AGPL-3.0-or-later |
 | [sightpane/ui](https://github.com/sightpane/ui) | the Flutter web dashboard the backend serves | AGPL-3.0-or-later |
 | [sightpane/flutter](https://github.com/sightpane/flutter) | the Dart/Flutter SDK, `sightpane` on pub.dev | Apache-2.0 |
 
@@ -28,11 +28,15 @@ flutter analyze && flutter test
 flutter test test/queue_test.dart                          # a single file
 flutter test --plain-name "drops frames first"             # a single test by name
 dart run tool/smoke_send.dart http://localhost:8790 dev    # a real envelope to a running backend
+
+cd example && flutter analyze && flutter test              # the example has its own tests
+cd example && flutter run -d chrome                        # drive the SDK by hand
 ```
 
-`smoke_send.dart` is the only thing here that touches a real backend. Everything
-else runs against `FakeTransport`, which proves the envelope was built but not
-that a server accepts it — run the smoke script once per contract change.
+`smoke_send.dart` and `example/` are the only things here that touch a real
+backend. Everything else runs against `FakeTransport`, which proves the envelope
+was built but not that a server accepts it — run the smoke script, or the
+example, once per contract change.
 
 `GITHUB_TOKEN` in this environment is a dummy that causes 401. Always run the
 GitHub CLI as `env -u GITHUB_TOKEN gh …`.
@@ -64,4 +68,12 @@ the SDK, then the dashboard.
 - The official `dart-flutter` plugin is enabled at project scope in `.claude/settings.json`.
 - `lib/sightpane.dart` carries the Apache-2.0 SPDX header. This package is embedded into other people's applications, which is why it is permissive and why its dependency list stays at `http`, `clock` and `web` — a new dependency is a decision, not a detail.
 - Test fixtures must not use literal "today" dates; derive from `DateTime.now()`.
+- `example/` is a real Flutter app with a path dependency on this package, so it
+  follows the working tree rather than the last release. It has its own
+  `flutter test`, which exists to catch a button that quietly stopped sending
+  anything — a renamed method fails the tests here, that would not. Two things
+  its tests cannot reach: frame capture needs a real raster, and the uncaught
+  async error needs the zone `init(appRunner:)` opens, which the test binding
+  owns. `bindFlutterErrors()` has to be called inside the test body, never in
+  `setUp`, or the binding overwrites it.
 - The roadmap for all three repositories lives in [sightpane/sightpane](https://github.com/sightpane/sightpane) under `future-todo-files/`.

@@ -1,0 +1,27 @@
+name: sightpane_example
+description: "A sample app that drives every part of the sightpane SDK."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # A path dependency on purpose: the example is here to exercise the SDK in
+  # this checkout, so it has to follow the working tree rather than the last
+  # release on pub.dev.
+  sightpane:
+    path: ../
+  # What `flutter create` ships. Without it every build warns that the
+  # CupertinoIcons font is missing, which is noise in an example.
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

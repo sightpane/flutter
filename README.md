@@ -80,6 +80,21 @@ already installed. Every error carries the breadcrumbs at that moment, the curre
 route and a fresh frame number; on the backend the same exception with the same
 first three app frames becomes one "error group".
 
+## Example
+
+[`example/`](example) is a small till application that drives every part of this
+package, and it is also the manual test rig — press a button, watch it land in
+the dashboard.
+
+```bash
+docker compose up -d --build   # a backend, from a checkout of sightpane/sightpane
+cd example && flutter run -d chrome
+```
+
+Its defaults point at `http://localhost:8790` with key `dev`, which is what that
+backend seeds, so there is nothing to configure. See [example/README.md](example/README.md)
+for what each button should produce.
+
 ## Queue and network
 
 Items collect in memory and go out over `POST /api/v1/envelope` when
