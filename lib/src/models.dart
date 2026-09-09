@@ -102,6 +102,7 @@ class SightpaneItem {
     int? frameSeq,
     String? route,
     DateTime? ts,
+    List<Map<String, Object?>> frames = const [],
   }) => SightpaneItem._('error', ts ?? DateTime.now().toUtc(), {
     'message': message,
     'exception': exceptionType,
@@ -110,6 +111,10 @@ class SightpaneItem {
     'handled': handled,
     'route': ?route,
     'frame_seq': ?frameSeq,
+    // The positions of a minified web stack, for the backend to resolve against
+    // an uploaded source map. Absent everywhere else: a native stack is already
+    // readable and `stack` is all the server needs.
+    if (frames.isNotEmpty) 'frames': frames,
     if (context.isNotEmpty) 'context': context,
     if (breadcrumbs.isNotEmpty)
       'breadcrumbs': [for (final b in breadcrumbs) b.toJson()],

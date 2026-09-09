@@ -59,6 +59,13 @@ the SDK, then the dashboard.
 - `Hog` is the static facade; `SightpaneClient` owns session, `BreadcrumbBuffer`, `SightpaneQueue`, `ReplayRecorder`, heartbeat timer and `AppLifecycleListener`. `Sightpane.init(..., appRunner:)` must create the binding, the client and `runApp` inside the same `runZonedGuarded` zone (`hog.dart`); touching `WidgetsBinding.instance` earlier crashes.
 - `SightpaneQueue` (`queue.dart`): in-memory only, flushes on `flushInterval`/`maxBatch` or immediately on an error item; failed batches are re-inserted at the **head** with 2→4→…→60 s backoff measured via `package:clock` (so `fakeAsync` can drive it — never `DateTime.now()` on that path). Over `maxQueue` it drops frames first, then non-errors; errors are never dropped. `HttpTransport` treats any 4xx as accepted (no retry).
 - Replay: `SightpaneReplay` wraps a `RepaintBoundary`; `ReplayRecorder` captures PNGs on an interval, skips byte-identical frames unless taps happened, and blacks out `SightpaneMask` rects. `SightpaneUserInteractionWidget` emits `pointer` samples throttled by interval **and** ≥3 px distance; taps always go through.
+- **Source maps** (`stack.dart`): on the web only, `captureException` also sends
+  `frames[{uri,line,column,member}]` parsed out of the browser's stack with
+  `package:stack_trace` — `stack` itself is unchanged, so this is additive and an
+  older backend ignores it. A native stack is already readable and produces no
+  frames. `parseWebFrames` never throws: an error while reporting an error would
+  replace the user's bug with ours. `tool/upload_sourcemap.dart` posts the maps;
+  the backend resolves and groups on them (see 01-source-maps).
 - Platform splits are conditional imports (`device_web.dart` / `device_io.dart`, chosen in `device.dart`); nothing under `lib/src` may import `dart:io` or `package:web` unconditionally.
 - Tests: `SightpaneOptions(transport: FakeTransport())` from `test/fake_transport.dart`; every widget test must end with `await Sightpane.close()` inside the body or it fails on pending timers. `toImage`/PNG decode need `tester.runAsync`.
 
@@ -66,7 +73,7 @@ the SDK, then the dashboard.
 
 - `.claude/skills/` carries the shared workflow skills (`code-auditor`, `spec-first-testing`, `debugging-advanced`, `issue-writer`, `pr-writer`, `pr-reviewer`). Provenance of the vendored ones is in `SOURCE-vendored-skills.md`.
 - The official `dart-flutter` plugin is enabled at project scope in `.claude/settings.json`.
-- `lib/sightpane.dart` carries the Apache-2.0 SPDX header. This package is embedded into other people's applications, which is why it is permissive and why its dependency list stays at `http`, `clock` and `web` — a new dependency is a decision, not a detail.
+- `lib/sightpane.dart` carries the Apache-2.0 SPDX header. This package is embedded into other people's applications, which is why it is permissive and why its dependency list stays at `http`, `clock`, `web` and `stack_trace` — a new dependency is a decision, not a detail. `stack_trace` was added for web stack parsing: it is the Dart team's, it is what `flutter_test` already pulls in, and the alternative was hand-written regexes for three browser formats.
 - Test fixtures must not use literal "today" dates; derive from `DateTime.now()`.
 - `example/` is a real Flutter app with a path dependency on this package, so it
   follows the working tree rather than the last release. It has its own

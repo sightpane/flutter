@@ -95,6 +95,31 @@ Its defaults point at `http://localhost:8790` with key `dev`, which is what that
 backend seeds, so there is nothing to configure. See [example/README.md](example/README.md)
 for what each button should produce.
 
+## Release builds and source maps
+
+A minified web build reports its stack as `main.dart.js:4321:19`: the names are
+gone, and because they move with every build the same failure lands in a new
+issue each release. The SDK sends the positions beside the raw stack and the
+backend resolves them against the map you upload for that release.
+
+```bash
+flutter build web --source-maps
+dart run tool/upload_sourcemap.dart \
+  --endpoint http://localhost:8790 --token "$SIGHTPANE_TOKEN" \
+  --project 1 --release 1.0.0 \
+  build/web/main.dart.js.map
+```
+
+`--release` has to be the same string as `SightpaneOptions.release`; that is what
+the server matches an error against. Upload as part of the deploy, before the
+build goes out — an error that arrives before its map is stored unsymbolicated
+and stays that way. The token is a **user** token for an owner of the project,
+not the project API key: a source map is a build output, and the key that ships
+inside the app may only write envelopes.
+
+Nothing to do on native platforms. A Dart stack trace is already readable, so the
+SDK sends no positions there and the backend groups on the text as before.
+
 ## Queue and network
 
 Items collect in memory and go out over `POST /api/v1/envelope` when

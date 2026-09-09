@@ -11,6 +11,7 @@ import 'options.dart';
 import 'queue.dart';
 import 'replay/recorder.dart';
 import 'session.dart';
+import 'stack.dart';
 import 'transport.dart';
 
 /// The SDK's static entry point.
@@ -236,11 +237,13 @@ class SightpaneClient {
     // Grab the screen as it looked when the error hit; the frame's sequence
     // number is attached to the error.
     unawaited(replay.captureNow());
+    final stackText = (stackTrace ?? StackTrace.current).toString();
     _enqueue(
       SightpaneItem.error(
         message: exception.toString(),
         exceptionType: exception.runtimeType.toString(),
-        stack: (stackTrace ?? StackTrace.current).toString(),
+        stack: stackText,
+        frames: kIsWeb ? parseWebFrames(stackText) : const [],
         fatal: fatal,
         handled: handled,
         context: context,

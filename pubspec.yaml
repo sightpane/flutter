@@ -12,6 +12,10 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.6.0
+  # Reading a browser's stack trace. The three engines write three different
+  # formats and this is the Dart team's parser for all of them; it is already in
+  # the tree of any app with flutter_test, and it pulls in nothing new.
+  stack_trace: ^1.12.0
   web: ^1.1.1
 
 dev_dependencies:
