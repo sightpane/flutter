@@ -151,4 +151,86 @@ void main() {
     expect(Sightpane.client.replay.lastSeq, isNull);
     await Sightpane.close();
   });
+
+  testWidgets('maskAllText blacks out text, unmasked text remains visible', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await Sightpane.init(
+      SightpaneOptions(
+        endpoint: 'http://x',
+        apiKey: 'k',
+        transport: t,
+        captureFlutterErrors: false,
+        replay: const SightpaneReplayOptions(
+          interval: Duration(days: 1),
+          scale: 1.0,
+          maskAllText: true,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SightpaneReplay(
+          child: Container(
+            color: const Color(0xFFFF0000),
+            child: Stack(
+              children: [
+                Positioned(
+                  left: 50,
+                  top: 50,
+                  width: 100,
+                  height: 50,
+                  child: Container(
+                    color: const Color(0xFF0000FF),
+                    child: const Text('Masked text'),
+                  ),
+                ),
+                Positioned(
+                  left: 250,
+                  top: 50,
+                  width: 100,
+                  height: 50,
+                  child: SightpaneUnmask(
+                    child: Container(
+                      color: const Color(0xFF00FF00),
+                      child: const Text('Unmasked text'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final rec = Sightpane.client.replay;
+    await tester.runAsync(() => rec.captureNow());
+    expect(rec.lastSeq, 1);
+    final frame = Sightpane.client.queue.pending.where((i) => i.isFrame).single;
+    final img = await tester.runAsync(
+      () => decode(base64Decode(frame.body['png'] as String)),
+    );
+    expect(img!.width, 400);
+
+    expect(
+      await tester.runAsync(() => pixel(img, 10, 10)),
+      const Color(0xFFFF0000),
+    );
+
+    expect(
+      await tester.runAsync(() => pixel(img, 70, 70)),
+      const Color(0xFF000000),
+    );
+
+    final unmaskedPixel = await tester.runAsync(() => pixel(img, 270, 70));
+    expect(unmaskedPixel, isNot(const Color(0xFF000000)));
+
+    await Sightpane.close();
+  });
 }

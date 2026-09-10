@@ -29,6 +29,7 @@ class SightpaneReplayOptions {
     this.skipUnchanged = true,
     this.recordPointer = true,
     this.pointerSampleInterval = const Duration(milliseconds: 50),
+    this.maskAllText = false,
   });
 
   /// When disabled, [SightpaneReplay] just renders its child.
@@ -42,6 +43,10 @@ class SightpaneReplayOptions {
 
   /// In [SightpaneReplayMode.onError] mode, how many seconds of live recording to send after an error.
   final int postErrorSeconds;
+
+  /// When enabled, all RenderParagraph and RenderEditable text rectangles are masked out,
+  /// with [SightpaneUnmask] as the exception.
+  final bool maskAllText;
 
   /// Time between two frames.
   final Duration interval;
@@ -84,7 +89,24 @@ class SightpaneOptions {
     this.sessionSampleRate = 1.0,
     this.errorSampleRate = 1.0,
     this.tracesSampleRate = 1.0,
+    this.scrub,
   });
+
+  /// PII scrubbing rules applied to breadcrumbs, error messages, and props.
+  /// If null, [defaultScrubRules] are used.
+  final List<ScrubRule>? scrub;
+
+  /// Effective PII scrubbing rules.
+  List<ScrubRule> get effectiveScrubRules => scrub ?? defaultScrubRules;
+
+  /// Applies all [effectiveScrubRules] to [input].
+  String scrubText(String input) {
+    var out = input;
+    for (final rule in effectiveScrubRules) {
+      out = rule.apply(out);
+    }
+    return out;
+  }
 
   /// Sampling rate for sessions (0.0 to 1.0). When not sampled, recording and
   /// breadcrumbs are disabled for the session, but errors are still captured.
@@ -137,3 +159,31 @@ class SightpaneOptions {
   /// pending non-frame items are saved across app restarts and restored on [Sightpane.init].
   final SightpaneStorage? storage;
 }
+
+/// A PII scrubbing rule that matches a pattern and replaces it.
+class ScrubRule {
+  const ScrubRule(this.pattern, [this.replacement = '[REDACTED]']);
+  final Pattern pattern;
+  final String replacement;
+
+  String apply(String input) => input.replaceAll(pattern, replacement);
+}
+
+final defaultScrubRules = <ScrubRule>[
+  ScrubRule(
+    RegExp(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'),
+    '[EMAIL]',
+  ),
+  ScrubRule(
+    RegExp(r'\b(?:\d[ -]*?){13,16}\b'),
+    '[CARD]',
+  ),
+  ScrubRule(
+    RegExp(r'\b[1-9]\d{10}\b'),
+    '[TCKN]',
+  ),
+  ScrubRule(
+    RegExp(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'),
+    '[PHONE]',
+  ),
+];

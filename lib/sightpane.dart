@@ -26,7 +26,8 @@ export 'src/http_client.dart' show SightpaneHttpClient;
 export 'src/models.dart';
 export 'src/options.dart';
 export 'src/queue.dart' show SightpaneQueue;
-export 'src/replay/mask.dart' show SightpaneMask, MaskRegistry;
+export 'src/replay/mask.dart'
+    show SightpaneMask, MaskRegistry, SightpaneUnmask, HogUnmask, UnmaskRegistry;
 export 'src/replay/recorder.dart' show ReplayRecorder;
 export 'src/replay/replay_widget.dart' show SightpaneReplay;
 export 'src/session.dart' show SightpaneSession;

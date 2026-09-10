@@ -267,14 +267,41 @@ class SightpaneClient {
     };
   }
 
+  SightpaneBreadcrumb _scrubBreadcrumb(SightpaneBreadcrumb b) {
+    return SightpaneBreadcrumb(
+      category: b.category,
+      message: options.scrubText(b.message),
+      level: b.level,
+      data: _scrubMap(b.data),
+      ts: b.ts,
+    );
+  }
+
+  Map<String, Object?> _scrubMap(Map<String, Object?> input) {
+    if (input.isEmpty) return input;
+    final out = <String, Object?>{};
+    for (final entry in input.entries) {
+      final v = entry.value;
+      if (v is String) {
+        out[entry.key] = options.scrubText(v);
+      } else if (v is Map<String, Object?>) {
+        out[entry.key] = _scrubMap(v);
+      } else {
+        out[entry.key] = v;
+      }
+    }
+    return out;
+  }
+
   void addBreadcrumb(SightpaneBreadcrumb b) {
     if (!sampled) return;
-    breadcrumbs.add(b);
-    _enqueue(SightpaneItem.breadcrumb(b));
+    final scrubbed = _scrubBreadcrumb(b);
+    breadcrumbs.add(scrubbed);
+    _enqueue(SightpaneItem.breadcrumb(scrubbed));
   }
 
   void capture(String event, [Map<String, Object?> props = const {}]) =>
-      _enqueue(SightpaneItem.event(event, props: props));
+      _enqueue(SightpaneItem.event(event, props: _scrubMap(props)));
 
   void identify(SightpaneUser user) {
     session.user = user;
@@ -283,7 +310,8 @@ class SightpaneClient {
     );
   }
 
-  void setProperty(String key, Object? value) => session.props[key] = value;
+  void setProperty(String key, Object? value) =>
+      session.props[key] = value is String ? options.scrubText(value) : value;
 
   void captureException(
     Object exception, {
@@ -303,13 +331,13 @@ class SightpaneClient {
     final stackText = (stackTrace ?? StackTrace.current).toString();
     _enqueue(
       SightpaneItem.error(
-        message: exception.toString(),
+        message: options.scrubText(exception.toString()),
         exceptionType: exception.runtimeType.toString(),
         stack: stackText,
         frames: kIsWeb ? parseWebFrames(stackText) : const [],
         fatal: fatal,
         handled: handled,
-        context: context,
+        context: _scrubMap(context),
         breadcrumbs: breadcrumbs.snapshot(),
         frameSeq: replay.lastSeq,
         route: currentRoute,
@@ -323,9 +351,9 @@ class SightpaneClient {
     Map<String, Object?> context = const {},
   }) => _enqueue(
     SightpaneItem.error(
-      message: message,
+      message: options.scrubText(message),
       exceptionType: 'Message',
-      context: {...context, 'level': level.name},
+      context: {..._scrubMap(context), 'level': level.name},
       breadcrumbs: breadcrumbs.snapshot(),
       frameSeq: replay.lastSeq,
       route: currentRoute,

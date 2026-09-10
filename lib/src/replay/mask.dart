@@ -52,3 +52,54 @@ class MaskRegistry {
     return out;
   }
 }
+
+/// An area that should NOT be masked, even when maskAllText is enabled.
+class SightpaneUnmask extends StatefulWidget {
+  const SightpaneUnmask({super.key, required this.child});
+  final Widget child;
+
+  @override
+  State<SightpaneUnmask> createState() => _SightpaneUnmaskState();
+}
+
+typedef HogUnmask = SightpaneUnmask;
+
+class _SightpaneUnmaskState extends State<SightpaneUnmask> {
+  @override
+  void initState() {
+    super.initState();
+    UnmaskRegistry.register(this);
+  }
+
+  @override
+  void dispose() {
+    UnmaskRegistry.unregister(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// Registry of [SightpaneUnmask]s.
+class UnmaskRegistry {
+  static final Set<State> _unmasks = {};
+
+  static void register(State s) => _unmasks.add(s);
+  static void unregister(State s) => _unmasks.remove(s);
+  static int get count => _unmasks.length;
+
+  static List<Rect> rects({RenderObject? ancestor}) {
+    final out = <Rect>[];
+    for (final s in _unmasks) {
+      if (!s.mounted) continue;
+      final ro = s.context.findRenderObject();
+      if (ro is! RenderBox || !ro.hasSize || !ro.attached) continue;
+      try {
+        final tl = ro.localToGlobal(Offset.zero, ancestor: ancestor);
+        out.add(tl & ro.size);
+      } catch (_) {}
+    }
+    return out;
+  }
+}

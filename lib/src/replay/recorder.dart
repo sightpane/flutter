@@ -187,6 +187,9 @@ class ReplayRecorder {
     try {
       final image = await ro.toImage(pixelRatio: options.scale);
       final masks = MaskRegistry.rects(ancestor: ro);
+      if (options.maskAllText) {
+        masks.addAll(_collectTextRects(ro));
+      }
       final png = await _encode(image, masks, options.scale);
       image.dispose();
       if (png == null) return;
@@ -246,6 +249,30 @@ class ReplayRecorder {
     final data = await out.toByteData(format: ui.ImageByteFormat.png);
     if (!identical(out, image)) out.dispose();
     return data?.buffer.asUint8List();
+  }
+
+  static List<Rect> _collectTextRects(RenderObject root) {
+    final unmasks = UnmaskRegistry.rects(ancestor: root);
+    final out = <Rect>[];
+    void visit(RenderObject node) {
+      if ((node is RenderParagraph || node is RenderEditable) &&
+          node is RenderBox &&
+          node.hasSize &&
+          node.attached &&
+          !node.size.isEmpty) {
+        try {
+          final tl = node.localToGlobal(Offset.zero, ancestor: root);
+          final rect = tl & node.size;
+          final isUnmasked = unmasks.any((u) => u.contains(rect.center) || u.overlaps(rect));
+          if (!isUnmasked) {
+            out.add(rect);
+          }
+        } catch (_) {}
+      }
+      node.visitChildren(visit);
+    }
+    visit(root);
+    return out;
   }
 
   static int _fnv(List<int> bytes) {
