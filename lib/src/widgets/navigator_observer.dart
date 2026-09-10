@@ -30,6 +30,21 @@ class SightpaneNavigatorObserver extends NavigatorObserver {
         data: {'from': _name(from), 'to': toName},
       ),
     );
+    if (toName.isNotEmpty && (action == 'push' || action == 'replace')) {
+      final sw = Stopwatch()..start();
+      final startTs = DateTime.now().toUtc();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        sw.stop();
+        c.recordSpan(
+          op: 'navigation',
+          name: 'route:$toName',
+          durationMs: sw.elapsedMicroseconds / 1000.0,
+          status: 'ok',
+          tags: {'from': _name(from), 'to': toName, 'action': action},
+          ts: startTs,
+        );
+      });
+    }
   }
 
   @override

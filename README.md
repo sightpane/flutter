@@ -66,6 +66,11 @@ class MyApp extends StatelessWidget {
   least 3 px, clicks always; `SightpaneReplayOptions.recordPointer`,
   `pointerSampleInterval`). The dashboard player draws the trail, the cursor and
   click rings on top of the frame.
+- Session replay modes: `SightpaneReplayOptions(mode: SightpaneReplayMode.onError, bufferSeconds: 30, postErrorSeconds: 15)`
+  keeps the last 30 seconds of frames and pointer interactions in an in-memory ring buffer.
+  When an error occurs, it automatically flushes the pre-error buffer and records live
+  for another 15 seconds before returning to buffering mode. Set `mode: SightpaneReplayMode.always`
+  for continuous streaming, or `SightpaneReplayMode.off` to disable.
 - `SightpaneMask(child: TextField(obscureText: true))` — blacked out in the recording
 - `SightpaneHttpClient()` — turns `package:http` requests into `http` breadcrumbs
 - Heartbeat: the current route is sent every 20 s (`SightpaneOptions.heartbeatInterval`,
@@ -126,8 +131,15 @@ Items collect in memory and go out over `POST /api/v1/envelope` when
 `flushInterval` (5 s) elapses or `maxBatch` (50) fills; errors are sent
 immediately. On a network failure the items are kept and retried with a
 2 → 4 → … → 60 s backoff. Past `maxQueue`, frames are dropped first, then
-non-error items; errors are never dropped. There is no persistent on-disk queue:
-if the app is closed before a batch is sent, that batch is lost.
+non-error items; errors are never dropped.
+
+Persistent offline queuing is provided via `SightpaneOptions.storage` (or
+`SightpaneStorage.createDefault()`). When configured, pending error reports, spans,
+and product analytics events are safely stored across application crashes or offline
+shutdowns and retransmitted on the next launch. Frames and raw pointer moves are
+excluded from persistent storage to preserve disk space and mobile bandwidth.
+On web platforms, `visibilitychange` and `pagehide` events automatically trigger an
+immediate queue flush.
 
 ## In tests
 
@@ -153,7 +165,8 @@ Pass a fake transport with `SightpaneOptions.transport`; in widget tests call
   typically 20–60 KB per frame on a normal screen, and only changed frames are sent).
 - `SightpaneMask` only blacks out the rectangle of the widget it wraps; while scrolling,
   the position at the moment of capture is used.
-- On web the last batch may not be sent when the tab is closed (no `sendBeacon`).
+- On web, `pagehide` and `visibilitychange` trigger an immediate flush, but browsers
+  may still abort requests if the tab is closed immediately.
 
 ## License
 

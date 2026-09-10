@@ -23,6 +23,13 @@ class SightpaneHttpClient extends http.BaseClient {
           data: {'status': r.statusCode, 'ms': sw.elapsedMilliseconds},
         ),
       );
+      Sightpane.maybeClient?.recordSpan(
+        op: 'http.client',
+        name: '${request.method} ${request.url}',
+        durationMs: sw.elapsedMilliseconds.toDouble(),
+        status: r.statusCode.toString(),
+        tags: {'status': r.statusCode, 'method': request.method, 'url': request.url.toString()},
+      );
       return r;
     } catch (e) {
       Sightpane.addBreadcrumb(
@@ -32,6 +39,13 @@ class SightpaneHttpClient extends http.BaseClient {
           level: SightpaneLevel.error,
           data: {'error': e.toString(), 'ms': sw.elapsedMilliseconds},
         ),
+      );
+      Sightpane.maybeClient?.recordSpan(
+        op: 'http.client',
+        name: '${request.method} ${request.url}',
+        durationMs: sw.elapsedMilliseconds.toDouble(),
+        status: 'error',
+        tags: {'error': e.toString(), 'method': request.method, 'url': request.url.toString()},
       );
       rethrow;
     }

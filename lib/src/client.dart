@@ -6,12 +6,14 @@ import 'package:flutter/widgets.dart';
 
 import 'breadcrumbs.dart';
 import 'device.dart';
+import 'lifecycle.dart';
 import 'models.dart';
 import 'options.dart';
 import 'queue.dart';
 import 'replay/recorder.dart';
 import 'session.dart';
 import 'stack.dart';
+import 'storage.dart';
 import 'transport.dart';
 
 /// The SDK's static entry point.
@@ -42,9 +44,28 @@ class Sightpane {
     FutureOr<void> Function()? appRunner,
   }) async {
     await _client?.close();
+    final appStartWatch = Stopwatch()..start();
+    final appStartTs = DateTime.now().toUtc();
+    void recordAppStart() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        appStartWatch.stop();
+        _client?.recordSpan(
+          op: 'app.start',
+          name: 'app_start',
+          durationMs: appStartWatch.elapsedMicroseconds / 1000.0,
+          status: 'ok',
+          tags: const {'cold_start': true},
+          ts: appStartTs,
+        );
+      });
+    }
+
     if (appRunner == null) {
       WidgetsFlutterBinding.ensureInitialized();
-      _client = SightpaneClient(options);
+      final c = SightpaneClient(options);
+      _client = c;
+      await c.queue.restoreFromStorage();
+      recordAppStart();
       return;
     }
     // The binding, the client and runApp all share one zone: that keeps the
@@ -54,6 +75,8 @@ class Sightpane {
       final c = SightpaneClient(options);
       _client = c;
       c.bindFlutterErrors();
+      await c.queue.restoreFromStorage();
+      recordAppStart();
       await appRunner();
     }, (e, st) => _client?.captureException(e, stackTrace: st, handled: false));
   }
@@ -105,6 +128,13 @@ class Sightpane {
 
   static Future<void> flush() => _client?.flush() ?? Future.value();
 
+  /// Starts a performance transaction.
+  static SightpaneTransaction startTransaction(
+    String name, {
+    String op = 'custom',
+    Map<String, Object?> tags = const {},
+  }) => client.startTransaction(name, op: op, tags: tags);
+
   static Future<void> close() async {
     await _client?.close();
     _client = null;
@@ -125,6 +155,7 @@ class SightpaneClient {
       flushInterval: options.flushInterval,
       maxBatch: options.maxBatch,
       maxQueue: options.maxQueue,
+      storage: options.storage,
       log: options.debug ? debugPrint : null,
     );
     replay = ReplayRecorder(
@@ -138,6 +169,9 @@ class SightpaneClient {
       appName: options.appName,
     );
     _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
+    bindPageHide(() {
+      unawaited(flush());
+    });
     if (options.heartbeatInterval > Duration.zero) {
       _heartbeat = Timer.periodic(
         options.heartbeatInterval,
@@ -234,6 +268,8 @@ class SightpaneClient {
     bool handled = true,
     Map<String, Object?> context = const {},
   }) {
+    // In onError mode, flush the pre-error buffered frames into the queue.
+    replay.flushOnError();
     // Grab the screen as it looked when the error hit; the frame's sequence
     // number is attached to the error.
     unawaited(replay.captureNow());
@@ -297,6 +333,40 @@ class SightpaneClient {
     }
   }
 
+  /// Starts a performance transaction.
+  SightpaneTransaction startTransaction(
+    String name, {
+    String op = 'custom',
+    Map<String, Object?> tags = const {},
+  }) => SightpaneTransaction(client: this, name: name, op: op, tags: tags);
+
+  /// Records a completed span.
+  void recordSpan({
+    required String op,
+    required String name,
+    required double durationMs,
+    String status = 'ok',
+    String? parentSpanId,
+    String? spanId,
+    String? traceId,
+    Map<String, Object?> tags = const {},
+    DateTime? ts,
+  }) {
+    _enqueue(
+      SightpaneItem.span(
+        op: op,
+        name: name,
+        durationMs: durationMs,
+        status: status,
+        parentSpanId: parentSpanId,
+        spanId: spanId,
+        traceId: traceId,
+        tags: tags,
+        ts: ts,
+      ),
+    );
+  }
+
   Future<void> flush() => queue.flush();
 
   Future<void> close() async {
@@ -315,3 +385,124 @@ class SightpaneClient {
     await transport.close();
   }
 }
+
+String _randomHex(int chars) {
+  final rnd = DateTime.now().microsecondsSinceEpoch;
+  return rnd.toRadixString(16).padLeft(chars, '0').substring(0, chars);
+}
+
+/// A span representing a timed sub-operation within a transaction.
+class SightpaneSpan {
+  SightpaneSpan({
+    required this.op,
+    required this.name,
+    required this.traceId,
+    required this.parentSpanId,
+    String? spanId,
+    DateTime? startTs,
+    this.tags = const {},
+  })  : spanId = spanId ?? _randomHex(8),
+        startTs = startTs ?? DateTime.now().toUtc(),
+        _stopwatch = Stopwatch()..start();
+
+  final String op;
+  final String name;
+  final String traceId;
+  final String parentSpanId;
+  final String spanId;
+  final DateTime startTs;
+  final Map<String, Object?> tags;
+  final Stopwatch _stopwatch;
+  double? durationMs;
+  String status = 'ok';
+  bool _finished = false;
+
+  bool get isFinished => _finished;
+
+  void finish({String? status}) {
+    if (_finished) return;
+    _finished = true;
+    _stopwatch.stop();
+    durationMs = _stopwatch.elapsedMicroseconds / 1000.0;
+    if (status != null) this.status = status;
+  }
+
+  Map<String, Object?> toJson() => {
+    'op': op,
+    'name': name,
+    'ts': startTs.toIso8601String(),
+    'duration_ms': durationMs ?? (_stopwatch.elapsedMicroseconds / 1000.0),
+    'status': status,
+    'span_id': spanId,
+    'parent_span_id': parentSpanId,
+    if (tags.isNotEmpty) 'tags': tags,
+  };
+}
+
+/// A performance transaction containing a root span and optional child spans.
+class SightpaneTransaction {
+  SightpaneTransaction({
+    required this.client,
+    required this.name,
+    this.op = 'custom',
+    String? traceId,
+    String? spanId,
+    DateTime? startTs,
+    this.tags = const {},
+  })  : traceId = traceId ?? _randomHex(16),
+        spanId = spanId ?? _randomHex(8),
+        startTs = startTs ?? DateTime.now().toUtc(),
+        _stopwatch = Stopwatch()..start();
+
+  final SightpaneClient client;
+  final String name;
+  final String op;
+  final String traceId;
+  final String spanId;
+  final DateTime startTs;
+  final Map<String, Object?> tags;
+  final Stopwatch _stopwatch;
+  final List<SightpaneSpan> _children = [];
+  double? durationMs;
+  String status = 'ok';
+  bool _finished = false;
+
+  bool get isFinished => _finished;
+
+  SightpaneSpan startChild(String op, String name, {Map<String, Object?> tags = const {}}) {
+    final span = SightpaneSpan(
+      op: op,
+      name: name,
+      traceId: traceId,
+      parentSpanId: spanId,
+      tags: tags,
+    );
+    _children.add(span);
+    return span;
+  }
+
+  void finish({String? status}) {
+    if (_finished) return;
+    _finished = true;
+    _stopwatch.stop();
+    durationMs = _stopwatch.elapsedMicroseconds / 1000.0;
+    if (status != null) this.status = status;
+    for (final c in _children) {
+      if (!c.isFinished) c.finish();
+    }
+    client._enqueue(
+      SightpaneItem.transaction(
+        op: op,
+        name: name,
+        durationMs: durationMs!,
+        status: this.status,
+        spanId: spanId,
+        traceId: traceId,
+        tags: tags,
+        spans: [for (final c in _children) c.toJson()],
+        ts: startTs,
+      ),
+    );
+  }
+}
+

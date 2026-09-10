@@ -79,6 +79,18 @@ class SightpanePointerSample {
 class SightpaneItem {
   SightpaneItem._(this.type, this.ts, this.body);
 
+  factory SightpaneItem.fromJson(Map<String, dynamic> json) {
+    final type = json['type'] as String;
+    final tsStr = json['ts'] as String?;
+    final ts = tsStr != null
+        ? DateTime.tryParse(tsStr)?.toUtc() ?? DateTime.now().toUtc()
+        : DateTime.now().toUtc();
+    final body = Map<String, Object?>.from(json)
+      ..remove('type')
+      ..remove('ts');
+    return SightpaneItem._(type, ts, body);
+  }
+
   factory SightpaneItem.breadcrumb(SightpaneBreadcrumb b) =>
       SightpaneItem._('breadcrumb', b.ts, b.toJson()..remove('ts'));
 
@@ -162,6 +174,49 @@ class SightpaneItem {
 
   factory SightpaneItem.sessionEnd({DateTime? ts}) =>
       SightpaneItem._('session_end', ts ?? DateTime.now().toUtc(), const {});
+
+  factory SightpaneItem.span({
+    required String op,
+    required String name,
+    required double durationMs,
+    String status = 'ok',
+    String? parentSpanId,
+    String? spanId,
+    String? traceId,
+    Map<String, Object?> tags = const {},
+    DateTime? ts,
+  }) => SightpaneItem._('span', ts ?? DateTime.now().toUtc(), {
+    'op': op,
+    'name': name,
+    'duration_ms': durationMs,
+    'status': status,
+    if (parentSpanId != null) 'parent_span_id': parentSpanId,
+    if (spanId != null) 'span_id': spanId,
+    if (traceId != null) 'trace_id': traceId,
+    if (tags.isNotEmpty) 'tags': tags,
+  });
+
+  factory SightpaneItem.transaction({
+    required String op,
+    required String name,
+    required double durationMs,
+    String status = 'ok',
+    String? spanId,
+    String? traceId,
+    Map<String, Object?> tags = const {},
+    List<Map<String, Object?>> spans = const [],
+    DateTime? ts,
+  }) => SightpaneItem._('transaction', ts ?? DateTime.now().toUtc(), {
+    'op': op,
+    'name': name,
+    'duration_ms': durationMs,
+    'status': status,
+    if (spanId != null) 'span_id': spanId,
+    if (traceId != null) 'trace_id': traceId,
+    if (tags.isNotEmpty) 'tags': tags,
+    if (spans.isNotEmpty) 'spans': spans,
+  });
+
 
   final String type;
   final DateTime ts;

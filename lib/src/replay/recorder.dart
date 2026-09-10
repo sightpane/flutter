@@ -1,12 +1,19 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../models.dart';
 import '../options.dart';
 import 'mask.dart';
+
+class _BufferedReplayItem {
+  _BufferedReplayItem(this.ts, this.item);
+  final DateTime ts;
+  final SightpaneItem item;
+}
 
 /// Captures frames from the [SightpaneReplay] boundary at a fixed interval, blacks
 /// out the masks, encodes the result as PNG and hands it to [onFrame] for the
@@ -27,17 +34,65 @@ class ReplayRecorder {
   DateTime? _lastMoveTs;
   Offset? _lastMove;
   Size? _lastLogicalSize;
+  final List<_BufferedReplayItem> _ringBuffer = [];
+  DateTime? _liveUntil;
 
   /// Number of pointer samples waiting to be sent (for tests).
   int get pendingPointerSamples => _pointer.length;
 
+  /// Number of items currently buffered in onError mode (for tests).
+  int get bufferedItemsCount => _ringBuffer.length;
+
+  /// Emits an item directly into the recorder pipeline (for tests).
+  @visibleForTesting
+  void emitForTesting(SightpaneItem item) => _emit(item);
+
   int? get lastSeq => _seq == 0 ? null : _seq;
   bool get isRunning => _timer != null;
+
+  bool get _isLive {
+    if (!options.enabled || options.mode == SightpaneReplayMode.off) return false;
+    if (options.mode == SightpaneReplayMode.always) return true;
+    final until = _liveUntil;
+    if (until == null) return false;
+    return clock.now().isBefore(until);
+  }
+
+  void _emit(SightpaneItem item) {
+    if (_isLive) {
+      onFrame(item);
+    } else if (options.enabled && options.mode == SightpaneReplayMode.onError) {
+      final now = clock.now();
+      _ringBuffer.add(_BufferedReplayItem(now, item));
+      _trimRingBuffer(now);
+    }
+  }
+
+  void _trimRingBuffer(DateTime now) {
+    final cutoff = now.subtract(Duration(seconds: options.bufferSeconds));
+    while (_ringBuffer.isNotEmpty && _ringBuffer.first.ts.isBefore(cutoff)) {
+      _ringBuffer.removeAt(0);
+    }
+  }
+
+  /// Flushes any ring-buffered frames and switches to live mode for [options.postErrorSeconds].
+  void flushOnError() {
+    if (options.mode == SightpaneReplayMode.onError && options.enabled) {
+      flushPointer();
+      final now = clock.now();
+      _trimRingBuffer(now);
+      for (final entry in _ringBuffer) {
+        onFrame(entry.item);
+      }
+      _ringBuffer.clear();
+      _liveUntil = now.add(Duration(seconds: options.postErrorSeconds));
+    }
+  }
 
   /// The boundary has been attached; periodic capture starts.
   void attach(GlobalKey boundaryKey) {
     _boundaryKey = boundaryKey;
-    if (!options.enabled) return;
+    if (!options.enabled || options.mode == SightpaneReplayMode.off) return;
     _timer?.cancel();
     _timer = Timer.periodic(options.interval, (_) => captureNow());
   }
@@ -50,6 +105,8 @@ class ReplayRecorder {
     _timer?.cancel();
     _timer = null;
     _boundaryKey = null;
+    _ringBuffer.clear();
+    _liveUntil = null;
   }
 
   /// A tap in global logical coordinates; it rides along on the next frame.
@@ -69,7 +126,11 @@ class ReplayRecorder {
 
   /// A pointer sample; moves are thinned out by both time and distance.
   void recordPointer(String kind, Offset global) {
-    if (!options.enabled || !options.recordPointer) return;
+    if (!options.enabled ||
+        options.mode == SightpaneReplayMode.off ||
+        !options.recordPointer) {
+      return;
+    }
     final key = _boundaryKey;
     final ro = key?.currentContext?.findRenderObject();
     if (ro is! RenderBox || !ro.hasSize) return;
@@ -105,7 +166,7 @@ class ReplayRecorder {
   /// Hands the pointer samples collected so far to the queue as one packet.
   void flushPointer() {
     if (_pointer.isEmpty) return;
-    onFrame(SightpaneItem.pointer(List.of(_pointer)));
+    _emit(SightpaneItem.pointer(List.of(_pointer)));
     _pointer.clear();
   }
 
@@ -113,7 +174,11 @@ class ReplayRecorder {
   /// when there is no boundary.
   Future<void> captureNow() async {
     flushPointer();
-    if (!options.enabled || _busy) return;
+    if (!options.enabled ||
+        options.mode == SightpaneReplayMode.off ||
+        _busy) {
+      return;
+    }
     final ro = _boundaryKey?.currentContext?.findRenderObject();
     if (ro is! RenderRepaintBoundary || !ro.hasSize || ro.debugNeedsPaint) {
       return;
@@ -138,7 +203,7 @@ class ReplayRecorder {
       }
       _lastHash = hash;
       _seq++;
-      onFrame(
+      _emit(
         SightpaneItem.frame(
           seq: _seq,
           width: (ro.size.width * options.scale).round(),

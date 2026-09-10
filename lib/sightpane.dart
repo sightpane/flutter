@@ -20,7 +20,8 @@ library;
 
 export 'src/breadcrumbs.dart' show BreadcrumbBuffer;
 export 'src/device.dart' show SightpaneDevice;
-export 'src/client.dart' show Sightpane, SightpaneClient;
+export 'src/client.dart'
+    show Sightpane, SightpaneClient, SightpaneSpan, SightpaneTransaction;
 export 'src/http_client.dart' show SightpaneHttpClient;
 export 'src/models.dart';
 export 'src/options.dart';
@@ -29,6 +30,8 @@ export 'src/replay/mask.dart' show SightpaneMask, MaskRegistry;
 export 'src/replay/recorder.dart' show ReplayRecorder;
 export 'src/replay/replay_widget.dart' show SightpaneReplay;
 export 'src/session.dart' show SightpaneSession;
+export 'src/storage.dart'
+    show SightpaneStorage, InMemorySightpaneStorage, FileSightpaneStorage;
 export 'src/transport.dart' show SightpaneTransport, HttpTransport;
 export 'src/widgets/navigator_observer.dart' show SightpaneNavigatorObserver;
 export 'src/widgets/user_interaction.dart'

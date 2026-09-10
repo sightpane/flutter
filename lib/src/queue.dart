@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 
 import 'models.dart';
+import 'storage.dart';
 import 'transport.dart';
 
 /// Collects items and ships them as envelopes, either on an interval or as soon
@@ -16,6 +17,7 @@ class SightpaneQueue {
     this.maxBatch = 50,
     this.maxQueue = 2000,
     this.maxBatchBytes = 1500000,
+    this.storage,
     this.log,
   });
 
@@ -25,22 +27,75 @@ class SightpaneQueue {
   final int maxBatch;
   final int maxQueue;
   final int maxBatchBytes;
+  final SightpaneStorage? storage;
   final void Function(String)? log;
 
   final List<SightpaneItem> _pending = [];
   Timer? _timer;
+  bool _persistScheduled = false;
   Future<void>? _inFlight;
   Duration _backoff = Duration.zero;
   DateTime? _notBefore;
   int dropped = 0;
   int sent = 0;
 
+  List<SightpaneItem>? _inFlightBatch;
+
   int get length => _pending.length;
   List<SightpaneItem> get pending => List.unmodifiable(_pending);
+
+  bool _shouldPersist(SightpaneItem item) =>
+      !item.isFrame && item.type != 'pointer';
+
+  void _schedulePersist() {
+    if (storage == null || _persistScheduled) return;
+    _persistScheduled = true;
+    scheduleMicrotask(() async {
+      if (!_persistScheduled) return;
+      _persistScheduled = false;
+      await persistNow();
+    });
+  }
+
+  /// Writes pending items immediately to persistent storage.
+  Future<void> persistNow() async {
+    _persistScheduled = false;
+    final s = storage;
+    if (s == null) return;
+    try {
+      final inFlight = _inFlightBatch ?? const <SightpaneItem>[];
+      final toSave = [...inFlight, ..._pending].where(_shouldPersist).toList();
+      await s.write(toSave);
+    } catch (e) {
+      log?.call('sightpane: could not write to offline storage: $e');
+    }
+  }
+
+  /// Restores pending items saved from a previous run or crash.
+  Future<void> restoreFromStorage() async {
+    final s = storage;
+    if (s == null) return;
+    try {
+      final items = await s.read();
+      if (items.isNotEmpty) {
+        log?.call(
+          'sightpane: restored ${items.length} items from offline storage',
+        );
+        _pending.addAll(items);
+        _enforceLimit();
+        flush();
+      }
+    } catch (e) {
+      log?.call('sightpane: could not read from offline storage: $e');
+    }
+  }
 
   void add(SightpaneItem item) {
     _pending.add(item);
     _enforceLimit();
+    if (_shouldPersist(item)) {
+      _schedulePersist();
+    }
     _timer ??= Timer(flushInterval, () {
       _timer = null;
       flush();
@@ -82,12 +137,15 @@ class SightpaneQueue {
   Future<void> _drain() async {
     while (_pending.isNotEmpty) {
       final batch = _takeBatch();
+      _inFlightBatch = batch;
       final ok = await transport.send(envelopeBuilder(batch));
+      _inFlightBatch = null;
       if (ok) {
         sent += batch.length;
         _backoff = Duration.zero;
         _notBefore = null;
         log?.call('sightpane: sent ${batch.length} items (total $sent)');
+        _schedulePersist();
         continue;
       }
       _pending.insertAll(0, batch);
@@ -96,12 +154,14 @@ class SightpaneQueue {
           : Duration(seconds: (_backoff.inSeconds * 2).clamp(2, 60));
       _notBefore = clock.now().add(_backoff);
       log?.call('sightpane: send failed, retrying in ${_backoff.inSeconds}s');
+      _schedulePersist();
       _timer ??= Timer(_backoff, () {
         _timer = null;
         flush();
       });
       return;
     }
+    _schedulePersist();
   }
 
   List<SightpaneItem> _takeBatch() {
@@ -120,5 +180,6 @@ class SightpaneQueue {
     _timer?.cancel();
     _timer = null;
     await flush();
+    await persistNow();
   }
 }

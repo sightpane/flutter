@@ -1,10 +1,28 @@
 import 'models.dart';
+import 'storage.dart';
 import 'transport.dart';
+
+/// Replay capture modes.
+enum SightpaneReplayMode {
+  /// Continuously captures and emits frames to the queue as they change.
+  always,
+
+  /// Buffers frames in memory; when an error occurs, flushes the buffered
+  /// frames (up to [SightpaneReplayOptions.bufferSeconds]) and records live for
+  /// [SightpaneReplayOptions.postErrorSeconds], then returns to buffering.
+  onError,
+
+  /// Completely disables recording.
+  off,
+}
 
 /// Session replay settings.
 class SightpaneReplayOptions {
   const SightpaneReplayOptions({
     this.enabled = true,
+    this.mode = SightpaneReplayMode.always,
+    this.bufferSeconds = 30,
+    this.postErrorSeconds = 15,
     this.interval = const Duration(seconds: 1),
     this.scale = 0.5,
     this.maxPendingFrames = 60,
@@ -15,6 +33,15 @@ class SightpaneReplayOptions {
 
   /// When disabled, [SightpaneReplay] just renders its child.
   final bool enabled;
+
+  /// Recording mode: always, onError, or off.
+  final SightpaneReplayMode mode;
+
+  /// In [SightpaneReplayMode.onError] mode, how many seconds of prior frames to keep in memory.
+  final int bufferSeconds;
+
+  /// In [SightpaneReplayMode.onError] mode, how many seconds of live recording to send after an error.
+  final int postErrorSeconds;
 
   /// Time between two frames.
   final Duration interval;
@@ -53,6 +80,7 @@ class SightpaneOptions {
     this.beforeSend,
     this.captureFlutterErrors = true,
     this.heartbeatInterval = const Duration(seconds: 20),
+    this.storage,
   });
 
   /// Backend root address, e.g. `http://localhost:8790`.
@@ -91,4 +119,8 @@ class SightpaneOptions {
   /// [Duration.zero] turns it off. Nothing is sent while the app is in the
   /// background.
   final Duration heartbeatInterval;
+
+  /// Storage for the persistent offline queue. When provided (or [SightpaneStorage.createDefault()]),
+  /// pending non-frame items are saved across app restarts and restored on [Sightpane.init].
+  final SightpaneStorage? storage;
 }
