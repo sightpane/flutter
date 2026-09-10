@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:sightpane/sightpane.dart';
 
 class FakeTransport implements SightpaneTransport {
-  FakeTransport({this.ok = true});
+  FakeTransport({this.ok = true, this.retryAfter});
   bool ok;
+  @override
+  Duration? retryAfter;
   final envelopes = <SightpaneEnvelope>[];
   int closed = 0;
   Completer<void>? gate;

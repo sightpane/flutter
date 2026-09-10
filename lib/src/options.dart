@@ -81,7 +81,20 @@ class SightpaneOptions {
     this.captureFlutterErrors = true,
     this.heartbeatInterval = const Duration(seconds: 20),
     this.storage,
+    this.sessionSampleRate = 1.0,
+    this.errorSampleRate = 1.0,
+    this.tracesSampleRate = 1.0,
   });
+
+  /// Sampling rate for sessions (0.0 to 1.0). When not sampled, recording and
+  /// breadcrumbs are disabled for the session, but errors are still captured.
+  final double sessionSampleRate;
+
+  /// Sampling rate for captured errors (0.0 to 1.0).
+  final double errorSampleRate;
+
+  /// Sampling rate for performance transactions/spans (0.0 to 1.0).
+  final double tracesSampleRate;
 
   /// Backend root address, e.g. `http://localhost:8790`.
   final String endpoint;

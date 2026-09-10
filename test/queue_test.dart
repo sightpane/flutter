@@ -115,4 +115,27 @@ void main() {
       expect(t.envelopes.length, 3);
     });
   });
+
+  test('429 + Retry-After produces requested backoff', () {
+    fakeAsync((async) {
+      final t = FakeTransport(ok: false, retryAfter: const Duration(seconds: 10));
+      final q = SightpaneQueue(
+        transport: t,
+        envelopeBuilder: build,
+        flushInterval: const Duration(seconds: 1),
+      );
+      q.add(SightpaneItem.event('rate_limited'));
+      async.elapse(const Duration(seconds: 1));
+      expect(q.length, 1);
+      expect(t.envelopes, isEmpty);
+
+      // Even if transport becomes ok, backoff is 10 seconds due to Retry-After
+      t.ok = true;
+      async.elapse(const Duration(seconds: 5));
+      expect(t.envelopes, isEmpty); // 10s not elapsed yet!
+      async.elapse(const Duration(seconds: 6));
+      expect(t.items.length, 1);
+      expect(q.length, 0);
+    });
+  });
 }

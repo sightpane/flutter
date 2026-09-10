@@ -149,9 +149,14 @@ class SightpaneQueue {
         continue;
       }
       _pending.insertAll(0, batch);
-      _backoff = _backoff == Duration.zero
-          ? const Duration(seconds: 2)
-          : Duration(seconds: (_backoff.inSeconds * 2).clamp(2, 60));
+      final retryAfter = transport.retryAfter;
+      if (retryAfter != null && retryAfter > Duration.zero) {
+        _backoff = retryAfter;
+      } else {
+        _backoff = _backoff == Duration.zero
+            ? const Duration(seconds: 2)
+            : Duration(seconds: (_backoff.inSeconds * 2).clamp(2, 60));
+      }
       _notBefore = clock.now().add(_backoff);
       log?.call('sightpane: send failed, retrying in ${_backoff.inSeconds}s');
       _schedulePersist();

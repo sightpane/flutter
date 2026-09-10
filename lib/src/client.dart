@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -26,6 +27,9 @@ class Sightpane {
   static SightpaneClient? _client;
 
   static bool get isInitialized => _client != null;
+
+  /// Whether the current session was chosen by [SightpaneOptions.sessionSampleRate].
+  static bool get sampled => _client?.sampled ?? true;
 
   /// Throws if the SDK has not been initialised.
   static SightpaneClient get client {
@@ -143,9 +147,11 @@ class Sightpane {
 
 /// All the state of one session: breadcrumbs, queue, replay.
 class SightpaneClient {
-  SightpaneClient(this.options)
+  SightpaneClient(this.options, {math.Random? random})
     : session = SightpaneSession(),
       breadcrumbs = BreadcrumbBuffer(options.maxBreadcrumbs),
+      _random = random ?? math.Random(),
+      sampled = _isSampled(options.sessionSampleRate, random ?? math.Random()),
       transport =
           options.transport ??
           HttpTransport(endpoint: options.endpoint, apiKey: options.apiKey) {
@@ -158,8 +164,14 @@ class SightpaneClient {
       storage: options.storage,
       log: options.debug ? debugPrint : null,
     );
+    final replayOptions = sampled
+        ? options.replay
+        : const SightpaneReplayOptions(
+            enabled: false,
+            mode: SightpaneReplayMode.off,
+          );
     replay = ReplayRecorder(
-      options: options.replay,
+      options: replayOptions,
       onFrame: _enqueue,
       log: options.debug ? debugPrint : null,
     );
@@ -180,15 +192,26 @@ class SightpaneClient {
     }
     if (options.debug) {
       debugPrint(
-        'sightpane: initialised endpoint=${options.endpoint} key=${options.apiKey.length > 6 ? '${options.apiKey.substring(0, 6)}…' : options.apiKey} session=${session.id} replay=${options.replay.enabled}',
+        'sightpane: initialised endpoint=${options.endpoint} key=${options.apiKey.length > 6 ? '${options.apiKey.substring(0, 6)}…' : options.apiKey} session=${session.id} replay=${replayOptions.enabled} sampled=$sampled',
       );
     }
+  }
+
+  static bool _isSampled(double rate, math.Random random) {
+    if (rate >= 1.0) return true;
+    if (rate <= 0.0) return false;
+    return random.nextDouble() < rate;
   }
 
   final SightpaneOptions options;
   final SightpaneSession session;
   final BreadcrumbBuffer breadcrumbs;
   final SightpaneTransport transport;
+  final math.Random _random;
+
+  /// Whether this session was sampled for recordings and breadcrumbs.
+  final bool sampled;
+
   late final SightpaneQueue queue;
   late final ReplayRecorder replay;
   late Map<String, Object?> _device;
@@ -245,6 +268,7 @@ class SightpaneClient {
   }
 
   void addBreadcrumb(SightpaneBreadcrumb b) {
+    if (!sampled) return;
     breadcrumbs.add(b);
     _enqueue(SightpaneItem.breadcrumb(b));
   }
@@ -268,11 +292,14 @@ class SightpaneClient {
     bool handled = true,
     Map<String, Object?> context = const {},
   }) {
-    // In onError mode, flush the pre-error buffered frames into the queue.
-    replay.flushOnError();
-    // Grab the screen as it looked when the error hit; the frame's sequence
-    // number is attached to the error.
-    unawaited(replay.captureNow());
+    if (!_isSampled(options.errorSampleRate, _random)) return;
+    if (sampled) {
+      // In onError mode, flush the pre-error buffered frames into the queue.
+      replay.flushOnError();
+      // Grab the screen as it looked when the error hit; the frame's sequence
+      // number is attached to the error.
+      unawaited(replay.captureNow());
+    }
     final stackText = (stackTrace ?? StackTrace.current).toString();
     _enqueue(
       SightpaneItem.error(
@@ -352,6 +379,7 @@ class SightpaneClient {
     Map<String, Object?> tags = const {},
     DateTime? ts,
   }) {
+    if (!_isSampled(options.tracesSampleRate, _random)) return;
     _enqueue(
       SightpaneItem.span(
         op: op,

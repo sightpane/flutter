@@ -8,6 +8,10 @@ import 'models.dart';
 /// retried.
 abstract class SightpaneTransport {
   Future<bool> send(SightpaneEnvelope envelope);
+
+  /// Backoff requested by the server via `Retry-After`.
+  Duration? get retryAfter => null;
+
   Future<void> close() async {}
 }
 
@@ -23,12 +27,17 @@ class HttpTransport implements SightpaneTransport {
   final String apiKey;
   final Duration timeout;
   final http.Client _client;
+  Duration? _retryAfter;
+
+  @override
+  Duration? get retryAfter => _retryAfter;
 
   Uri get _uri =>
       Uri.parse('${endpoint.replaceFirst(RegExp(r'/+$'), '')}/api/v1/envelope');
 
   @override
   Future<bool> send(SightpaneEnvelope envelope) async {
+    _retryAfter = null;
     try {
       final r = await _client
           .post(
@@ -37,6 +46,16 @@ class HttpTransport implements SightpaneTransport {
             body: jsonEncode(envelope.toJson()),
           )
           .timeout(timeout);
+      if (r.statusCode == 429) {
+        final ra = r.headers['retry-after'];
+        if (ra != null) {
+          final seconds = int.tryParse(ra.trim());
+          if (seconds != null && seconds > 0) {
+            _retryAfter = Duration(seconds: seconds);
+          }
+        }
+        return false;
+      }
       // A 4xx is a client error, so retrying it is pointless → count it as
       // accepted.
       return r.statusCode < 500;
