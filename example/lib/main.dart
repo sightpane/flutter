@@ -81,11 +81,15 @@ class ExampleApp extends StatelessWidget {
       '/checkout': (_) => const CheckoutPage(),
     },
     initialRoute: '/',
-    // Both wrappers go around everything, once. SightpaneReplay is the boundary
-    // the frames are captured from, and the interaction widget is what turns
-    // taps and drags into the pointer trail drawn over them.
-    builder: (context, child) =>
-        SightpaneReplay(child: SightpaneUserInteractionWidget(child: child!)),
+    // Wrappers go around everything, once:
+    // - SightpaneSurveyOverlay monitors current route and displays matching active surveys.
+    // - SightpaneReplay is the boundary the frames are captured from.
+    // - SightpaneUserInteractionWidget turns taps and drags into the pointer trail.
+    builder: (context, child) => SightpaneSurveyOverlay(
+      child: SightpaneReplay(
+        child: SightpaneUserInteractionWidget(child: child!),
+      ),
+    ),
   );
 }
 

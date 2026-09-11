@@ -38,7 +38,15 @@ export 'src/widgets/navigator_observer.dart' show SightpaneNavigatorObserver;
 export 'src/widgets/user_interaction.dart'
     show SightpaneUserInteractionWidget, describeTapTarget;
 export 'src/surveys/survey_overlay.dart'
-    show SightpaneSurveyCard, SurveyPrompt, SurveyAnswer, SurveyType;
+    show
+        SightpaneSurveyOverlay,
+        SightpaneSurveyOverlayState,
+        SightpaneSurvey,
+        SurveyTargeting,
+        SightpaneSurveyCard,
+        SurveyPrompt,
+        SurveyAnswer,
+        SurveyType;
 export 'src/crons/crons.dart' show CronCheckinClient;
 export 'src/profiling/profiler.dart'
     show ProfileFrame, ProfileSample, ProfileData, SightpaneProfileSampler;

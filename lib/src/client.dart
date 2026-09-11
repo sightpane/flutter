@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:http/http.dart' as http;
 
 import 'breadcrumbs.dart';
 import 'crons/crons.dart';
@@ -16,6 +18,7 @@ import 'queue.dart';
 import 'replay/recorder.dart';
 import 'session.dart';
 import 'stack.dart';
+import 'surveys/survey_overlay.dart';
 import 'transport.dart';
 
 /// The SDK's static entry point.
@@ -171,6 +174,34 @@ class Sightpane {
       ) ??
       Future.value(false);
 
+  /// The current route, as reported by the navigation observer or manually set.
+  static String? get currentRoute => _client?.currentRoute;
+  static set currentRoute(String? val) {
+    if (_client != null) _client!.currentRoute = val;
+  }
+
+  /// Notifier that emits when the current route changes.
+  static ValueNotifier<String?>? get routeNotifier => _client?.routeNotifier;
+
+  /// Fetches active surveys for this project.
+  static Future<List<SightpaneSurvey>> fetchActiveSurveys({http.Client? client}) async =>
+      _client?.fetchActiveSurveys(client: client) ?? Future.value(const []);
+
+  /// Submits an answer for the given survey ID.
+  static Future<bool> submitSurveyResponse({
+    required String surveyId,
+    int? score,
+    String? responseText,
+    http.Client? client,
+  }) async =>
+      _client?.submitSurveyResponse(
+        surveyId: surveyId,
+        score: score,
+        responseText: responseText,
+        client: client,
+      ) ??
+      Future.value(false);
+
   static Future<void> close() async {
     await _client?.close();
     _client = null;
@@ -254,8 +285,18 @@ class SightpaneClient {
   ui.ErrorCallback? _prevPlatformOnError;
   bool _errorsBound = false;
 
+  /// Notifier that emits when the current route changes.
+  final ValueNotifier<String?> routeNotifier = ValueNotifier<String?>(null);
+  String? _currentRoute;
+
   /// The current route, as reported by the navigation observer.
-  String? currentRoute;
+  String? get currentRoute => _currentRoute;
+  set currentRoute(String? val) {
+    if (_currentRoute != val) {
+      _currentRoute = val;
+      routeNotifier.value = val;
+    }
+  }
 
   Map<String, Object?> get device => _device;
 
@@ -524,6 +565,86 @@ class SightpaneClient {
     _enqueue(SightpaneItem.sessionEnd());
     await queue.close();
     await transport.close();
+    routeNotifier.dispose();
+  }
+
+  /// Fetches active surveys for the configured project.
+  Future<List<SightpaneSurvey>> fetchActiveSurveys({http.Client? client}) async {
+    final ep = options.endpoint.replaceFirst(RegExp(r'/+$'), '');
+    final uri = Uri.parse('$ep/api/v1/surveys/active');
+    final httpClient = client ?? http.Client();
+    final shouldClose = client == null;
+    try {
+      final res = await httpClient.get(
+        uri,
+        headers: {
+          'X-Sightpane-Key': options.apiKey,
+          'X-Hog-Key': options.apiKey,
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        if (data is Map<String, dynamic> && data['surveys'] is List) {
+          final list = data['surveys'] as List;
+          return list
+              .whereType<Map<String, dynamic>>()
+              .map(SightpaneSurvey.fromJson)
+              .toList();
+        }
+      }
+      return const [];
+    } catch (e) {
+      if (options.debug) {
+        debugPrint('[Sightpane] fetchActiveSurveys failed: $e');
+      }
+      return const [];
+    } finally {
+      if (shouldClose) httpClient.close();
+    }
+  }
+
+  /// Submits an answer for the given survey ID.
+  Future<bool> submitSurveyResponse({
+    required String surveyId,
+    int? score,
+    String? responseText,
+    http.Client? client,
+  }) async {
+    final ep = options.endpoint.replaceFirst(RegExp(r'/+$'), '');
+    final uri = Uri.parse('$ep/api/v1/surveys/$surveyId/responses');
+    final httpClient = client ?? http.Client();
+    final shouldClose = client == null;
+    try {
+      final body = <String, dynamic>{
+        'session_id': session.id,
+        'user_id': session.user?.id ?? '',
+        'score': ?score,
+        if (responseText != null && responseText.isNotEmpty)
+          'response_text': responseText,
+      };
+
+      final res = await httpClient
+          .post(
+            uri,
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Sightpane-Key': options.apiKey,
+              'X-Hog-Key': options.apiKey,
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      return res.statusCode == 201 || res.statusCode == 200;
+    } catch (e) {
+      if (options.debug) {
+        debugPrint('[Sightpane] submitSurveyResponse failed: $e');
+      }
+      return false;
+    } finally {
+      if (shouldClose) httpClient.close();
+    }
   }
 }
 

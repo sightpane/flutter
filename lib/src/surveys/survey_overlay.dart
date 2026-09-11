@@ -10,6 +10,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../client.dart';
 import '../models.dart';
@@ -21,6 +23,122 @@ enum SurveyType {
   rating,
   openText,
   singleChoice,
+}
+
+/// In-app survey targeting rules.
+class SurveyTargeting {
+  const SurveyTargeting({
+    this.urlPattern,
+    this.eventTrigger,
+    this.sampleRate = 1.0,
+  });
+
+  final String? urlPattern;
+  final String? eventTrigger;
+  final double sampleRate;
+
+  factory SurveyTargeting.fromJson(Map<String, dynamic> json) {
+    return SurveyTargeting(
+      urlPattern: json['url_pattern'] as String?,
+      eventTrigger: json['event_trigger'] as String?,
+      sampleRate: (json['sample_rate'] as num?)?.toDouble() ?? 1.0,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    if (urlPattern != null) 'url_pattern': urlPattern,
+    if (eventTrigger != null) 'event_trigger': eventTrigger,
+    'sample_rate': sampleRate,
+  };
+
+  bool matchesRoute(String? route) {
+    if (urlPattern == null || urlPattern!.trim().isEmpty) return true;
+    if (route == null || route.trim().isEmpty) return false;
+    final pattern = urlPattern!.trim();
+    final current = route.trim();
+    if (pattern == current) return true;
+
+    final cleanCurrent = current.replaceAll(RegExp(r'^#'), '');
+    final cleanPattern = pattern.replaceAll(RegExp(r'^#'), '');
+    if (cleanPattern == cleanCurrent) return true;
+
+    final normCurrent = cleanCurrent.endsWith('/') && cleanCurrent.length > 1
+        ? cleanCurrent.substring(0, cleanCurrent.length - 1)
+        : cleanCurrent;
+    final normPattern = cleanPattern.endsWith('/') && cleanPattern.length > 1
+        ? cleanPattern.substring(0, cleanPattern.length - 1)
+        : cleanPattern;
+    if (normPattern == normCurrent) return true;
+
+    if (cleanPattern.endsWith('*')) {
+      final prefix = cleanPattern.substring(0, cleanPattern.length - 1);
+      return cleanCurrent.startsWith(prefix);
+    }
+    return false;
+  }
+}
+
+/// In-app survey configuration from Sightpane backend.
+class SightpaneSurvey {
+  const SightpaneSurvey({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.question,
+    this.description = '',
+    this.choices = const [],
+    this.targeting = const SurveyTargeting(),
+    this.active = true,
+  });
+
+  final String id;
+  final String name;
+  final SurveyType type;
+  final String question;
+  final String description;
+  final List<String> choices;
+  final SurveyTargeting targeting;
+  final bool active;
+
+  factory SightpaneSurvey.fromJson(Map<String, dynamic> json) {
+    final typeStr = json['type'] as String? ?? 'nps';
+    final type = switch (typeStr) {
+      'csat' => SurveyType.csat,
+      'rating' => SurveyType.rating,
+      'open_text' || 'openText' => SurveyType.openText,
+      'single_choice' || 'singleChoice' => SurveyType.singleChoice,
+      _ => SurveyType.nps,
+    };
+
+    final targetingJson = json['targeting'];
+    final targeting = targetingJson is Map<String, dynamic>
+        ? SurveyTargeting.fromJson(targetingJson)
+        : const SurveyTargeting();
+
+    final choicesRaw = json['choices'];
+    final choices = choicesRaw is List
+        ? choicesRaw.map((e) => e.toString()).toList()
+        : const <String>[];
+
+    return SightpaneSurvey(
+      id: json['id'].toString(),
+      name: json['name'] as String? ?? '',
+      type: type,
+      question: json['question'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      choices: choices,
+      targeting: targeting,
+      active: json['active'] as bool? ?? true,
+    );
+  }
+
+  SurveyPrompt toPrompt() => SurveyPrompt(
+    id: id,
+    type: type,
+    question: question,
+    description: description,
+    choices: choices,
+  );
 }
 
 /// In-app survey question definition.
@@ -244,28 +362,31 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
     return Column(
       children: [
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: List.generate(11, (i) {
             final isSelected = _selectedScore == i;
-            return GestureDetector(
-              onTap: () => setState(() => _selectedScore = i),
-              child: Container(
-                width: 26,
-                height: 32,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: isSelected ? accent : Colors.transparent,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: isSelected ? accent : Colors.grey.withValues(alpha: 0.4),
-                  ),
-                ),
-                child: Text(
-                  '$i',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                    color: isSelected ? Colors.white : null,
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 1),
+                child: GestureDetector(
+                  onTap: () => setState(() => _selectedScore = i),
+                  child: Container(
+                    height: 32,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: isSelected ? accent : Colors.transparent,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: isSelected ? accent : Colors.grey.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Text(
+                      '$i',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? Colors.white : null,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -276,8 +397,21 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
         const Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('0 - Not at all', style: TextStyle(fontSize: 10, color: Colors.grey)),
-            Text('10 - Extremely likely', style: TextStyle(fontSize: 10, color: Colors.grey)),
+            Flexible(
+              child: Text(
+                '0 - Not at all',
+                style: TextStyle(fontSize: 10, color: Colors.grey),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                '10 - Extremely likely',
+                style: TextStyle(fontSize: 10, color: Colors.grey),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
       ],
@@ -343,3 +477,252 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
     );
   }
 }
+
+/// In-app survey overlay that monitors navigation route changes, evaluates survey targeting
+/// rules, and displays interactive survey cards when criteria are met.
+class SightpaneSurveyOverlay extends StatefulWidget {
+  const SightpaneSurveyOverlay({
+    super.key,
+    required this.child,
+    this.accentColor,
+    this.backgroundColor,
+    this.activeSurveys,
+  });
+
+  final Widget child;
+  final Color? accentColor;
+  final Color? backgroundColor;
+
+  /// Optional preloaded surveys. If null, surveys are fetched from the Sightpane backend.
+  final List<SightpaneSurvey>? activeSurveys;
+
+  @override
+  State<SightpaneSurveyOverlay> createState() => SightpaneSurveyOverlayState();
+}
+
+class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
+  List<SightpaneSurvey>? _surveys;
+  SightpaneSurvey? _activeSurvey;
+  bool _visible = false;
+  bool _submitted = false;
+  final Set<String> _dismissedOrCompleted = <String>{};
+  final math.Random _random = math.Random();
+  Timer? _dismissTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.activeSurveys != null) {
+      _surveys = List.of(widget.activeSurveys!);
+      _evaluateTargeting(Sightpane.maybeClient?.currentRoute);
+    } else {
+      _fetchSurveys();
+    }
+    Sightpane.maybeClient?.routeNotifier.addListener(_onRouteChanged);
+  }
+
+  @override
+  void didUpdateWidget(SightpaneSurveyOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.activeSurveys != oldWidget.activeSurveys && widget.activeSurveys != null) {
+      _surveys = List.of(widget.activeSurveys!);
+      _evaluateTargeting(Sightpane.maybeClient?.currentRoute);
+    }
+  }
+
+  @override
+  void dispose() {
+    _dismissTimer?.cancel();
+    Sightpane.maybeClient?.routeNotifier.removeListener(_onRouteChanged);
+    super.dispose();
+  }
+
+  Future<void> _fetchSurveys() async {
+    try {
+      final client = Sightpane.maybeClient;
+      if (client != null) {
+        final fetched = await client.fetchActiveSurveys();
+        if (mounted) {
+          setState(() {
+            _surveys = fetched;
+          });
+          _evaluateTargeting(client.currentRoute);
+        }
+      }
+    } catch (_) {
+      // Ignore network errors on survey fetch
+    }
+  }
+
+  void _onRouteChanged() {
+    final route = Sightpane.maybeClient?.currentRoute;
+    _evaluateTargeting(route);
+  }
+
+  /// Evaluates targeting rules against current route and event.
+  void evaluateTargeting({String? route, String? event}) {
+    _evaluateTargeting(route ?? Sightpane.maybeClient?.currentRoute, event: event);
+  }
+
+  void _evaluateTargeting(String? route, {String? event}) {
+    if (!mounted || _activeSurvey != null || _surveys == null || _surveys!.isEmpty) {
+      return;
+    }
+
+    for (final survey in _surveys!) {
+      if (!survey.active) continue;
+      if (_dismissedOrCompleted.contains(survey.id)) continue;
+
+      // Event trigger check
+      if (survey.targeting.eventTrigger != null &&
+          survey.targeting.eventTrigger!.isNotEmpty) {
+        if (event == null || event != survey.targeting.eventTrigger) {
+          continue;
+        }
+      }
+
+      // Route check
+      if (!survey.targeting.matchesRoute(route)) {
+        continue;
+      }
+
+      // Sample rate check
+      if (survey.targeting.sampleRate < 1.0) {
+        if (_random.nextDouble() > survey.targeting.sampleRate) {
+          continue;
+        }
+      }
+
+      // Trigger this survey!
+      setState(() {
+        _activeSurvey = survey;
+        _visible = true;
+        _submitted = false;
+      });
+      break;
+    }
+  }
+
+  void _handleDismiss() {
+    if (_activeSurvey == null) return;
+    _dismissedOrCompleted.add(_activeSurvey!.id);
+    _hide();
+  }
+
+  Future<void> _handleSubmit(SurveyAnswer answer) async {
+    final surveyId = _activeSurvey?.id ?? answer.surveyId;
+    _dismissedOrCompleted.add(surveyId);
+
+    // Call backend
+    await Sightpane.maybeClient?.submitSurveyResponse(
+      surveyId: surveyId,
+      score: answer.score,
+      responseText: answer.responseText,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _submitted = true;
+    });
+
+    _dismissTimer?.cancel();
+    _dismissTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) {
+        _hide();
+      }
+    });
+  }
+
+  void _hide() {
+    setState(() {
+      _visible = false;
+    });
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        setState(() {
+          _activeSurvey = null;
+          _submitted = false;
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final isMobile = size.width < 540;
+
+    return Stack(
+      children: [
+        widget.child,
+        if (_activeSurvey != null)
+          Positioned(
+            left: isMobile ? 16 : null,
+            right: 16,
+            bottom: 16,
+            width: isMobile ? null : 380,
+            child: AnimatedSlide(
+              offset: _visible ? Offset.zero : const Offset(0, 1.2),
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutCubic,
+              child: AnimatedOpacity(
+                opacity: _visible ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 250),
+                child: _submitted
+                    ? _buildThankYouCard(context)
+                    : SightpaneSurveyCard(
+                        prompt: _activeSurvey!.toPrompt(),
+                        onSubmit: _handleSubmit,
+                        onDismiss: _handleDismiss,
+                        accentColor: widget.accentColor,
+                        backgroundColor: widget.backgroundColor,
+                      ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildThankYouCard(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bg = widget.backgroundColor ?? (isDark ? const Color(0xFF1E1E24) : Colors.white);
+    final accent = widget.accentColor ?? theme.primaryColor;
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(
+            color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.check_circle, color: accent, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Thank you for your feedback!',
+                style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
