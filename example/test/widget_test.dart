@@ -24,6 +24,9 @@ class RecordingTransport implements SightpaneTransport {
   Iterable<Object?> namesOf(String t) => ofType(t).map((i) => i.body['name']);
 
   @override
+  Duration? get retryAfter => null;
+
+  @override
   Future<bool> send(SightpaneEnvelope envelope) async {
     envelopes.add(envelope);
     return true;

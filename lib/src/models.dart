@@ -190,9 +190,9 @@ class SightpaneItem {
     'name': name,
     'duration_ms': durationMs,
     'status': status,
-    if (parentSpanId != null) 'parent_span_id': parentSpanId,
-    if (spanId != null) 'span_id': spanId,
-    if (traceId != null) 'trace_id': traceId,
+    'parent_span_id': ?parentSpanId,
+    'span_id': ?spanId,
+    'trace_id': ?traceId,
     if (tags.isNotEmpty) 'tags': tags,
   });
 
@@ -211,8 +211,8 @@ class SightpaneItem {
     'name': name,
     'duration_ms': durationMs,
     'status': status,
-    if (spanId != null) 'span_id': spanId,
-    if (traceId != null) 'trace_id': traceId,
+    'span_id': ?spanId,
+    'trace_id': ?traceId,
     if (tags.isNotEmpty) 'tags': tags,
     if (spans.isNotEmpty) 'spans': spans,
   });

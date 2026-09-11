@@ -84,3 +84,4 @@ the SDK, then the dashboard.
   owns. `bindFlutterErrors()` has to be called inside the test body, never in
   `setUp`, or the binding overwrites it.
 - The roadmap for all three repositories lives in [sightpane/sightpane](https://github.com/sightpane/sightpane) under `future-todo-files/`.
+- **Commit on issue/task completion**: Whenever an issue, bug fix, or SDK task is finished and verified (`flutter analyze`, `flutter test`), create a descriptive conventional commit explaining what was changed and why. Do not run `git push` unless explicitly asked.

@@ -14,7 +14,6 @@ import 'queue.dart';
 import 'replay/recorder.dart';
 import 'session.dart';
 import 'stack.dart';
-import 'storage.dart';
 import 'transport.dart';
 
 /// The SDK's static entry point.
