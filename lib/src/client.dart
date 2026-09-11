@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import 'breadcrumbs.dart';
+import 'crons/crons.dart';
 import 'device.dart';
 import 'lifecycle.dart';
 import 'models.dart';
@@ -137,6 +138,21 @@ class Sightpane {
     String op = 'custom',
     Map<String, Object?> tags = const {},
   }) => client.startTransaction(name, op: op, tags: tags);
+
+  /// Records a heartbeat check-in for a scheduled cron job or background worker.
+  static Future<bool> checkin(
+    String slug, {
+    String status = 'ok',
+    int? durationMs,
+    String? message,
+  }) =>
+      _client?.checkin(
+        slug,
+        status: status,
+        durationMs: durationMs,
+        message: message,
+      ) ??
+      Future.value(false);
 
   static Future<void> close() async {
     await _client?.close();
@@ -419,6 +435,25 @@ class SightpaneClient {
         tags: tags,
         ts: ts,
       ),
+    );
+  }
+
+  /// Records a heartbeat check-in for a scheduled cron job or background worker.
+  Future<bool> checkin(
+    String slug, {
+    String status = 'ok',
+    int? durationMs,
+    String? message,
+  }) {
+    final c = CronCheckinClient(
+      endpoint: options.endpoint,
+      apiKey: options.apiKey,
+    );
+    return c.checkin(
+      slug,
+      status: status,
+      durationMs: durationMs,
+      message: message,
     );
   }
 

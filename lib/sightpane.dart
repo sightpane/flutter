@@ -39,3 +39,4 @@ export 'src/widgets/user_interaction.dart'
     show SightpaneUserInteractionWidget, describeTapTarget;
 export 'src/surveys/survey_overlay.dart'
     show SightpaneSurveyCard, SurveyPrompt, SurveyAnswer, SurveyType;
+export 'src/crons/crons.dart' show CronCheckinClient;
