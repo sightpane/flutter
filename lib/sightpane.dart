@@ -21,7 +21,7 @@ library;
 export 'src/breadcrumbs.dart' show BreadcrumbBuffer;
 export 'src/device.dart' show SightpaneDevice;
 export 'src/client.dart'
-    show Sightpane, SightpaneClient, SightpaneSpan, SightpaneTransaction;
+    show Sightpane, SightpaneClient, SightpaneSpan, SightpaneTransaction, SightpaneTraceContext;
 export 'src/http_client.dart' show SightpaneHttpClient;
 export 'src/models.dart';
 export 'src/options.dart';

@@ -41,6 +41,9 @@ class Sightpane {
   /// Null if the SDK has not been initialised.
   static SightpaneClient? get maybeClient => _client;
 
+  /// The active transaction, if any.
+  static SightpaneTransaction? currentTransaction;
+
   /// Sets the SDK up; when [appRunner] is given the app runs inside a zone that
   /// collects uncaught errors.
   static Future<void> init(
@@ -137,7 +140,11 @@ class Sightpane {
     String name, {
     String op = 'custom',
     Map<String, Object?> tags = const {},
-  }) => client.startTransaction(name, op: op, tags: tags);
+  }) {
+    final tx = client.startTransaction(name, op: op, tags: tags);
+    currentTransaction = tx;
+    return tx;
+  }
 
   /// Records a heartbeat check-in for a scheduled cron job or background worker.
   static Future<bool> checkin(
@@ -476,9 +483,44 @@ class SightpaneClient {
   }
 }
 
-String _randomHex(int chars) {
-  final rnd = DateTime.now().microsecondsSinceEpoch;
-  return rnd.toRadixString(16).padLeft(chars, '0').substring(0, chars);
+String _randomHex(int byteLength) {
+  final rnd = math.Random();
+  final bytes = List<int>.generate(byteLength, (_) => rnd.nextInt(256));
+  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// W3C TraceContext utilities for distributed tracing.
+class SightpaneTraceContext {
+  SightpaneTraceContext({
+    required this.traceId,
+    required this.spanId,
+    this.parentSpanId,
+    this.sampled = true,
+  });
+
+  final String traceId;
+  final String spanId;
+  final String? parentSpanId;
+  final bool sampled;
+
+  /// Returns the standard W3C `traceparent` header value:
+  /// `00-{trace_id}-{span_id}-{flags}`.
+  String toTraceparent() => '00-$traceId-$spanId-${sampled ? '01' : '00'}';
+
+  /// Parses a W3C `traceparent` header value.
+  static SightpaneTraceContext? tryParse(String? header) {
+    if (header == null) return null;
+    final trimmed = header.trim();
+    final parts = trimmed.split('-');
+    if (parts.length != 4 || parts[0] != '00') return null;
+    final traceId = parts[1].toLowerCase();
+    final spanId = parts[2].toLowerCase();
+    if (traceId.length != 32 || spanId.length != 16) return null;
+    if (traceId == '00000000000000000000000000000000' || spanId == '0000000000000000') return null;
+    final flags = parts[3];
+    final sampled = flags == '01' || (flags.length == 2 && flags[1] == '1');
+    return SightpaneTraceContext(traceId: traceId, spanId: spanId, sampled: sampled);
+  }
 }
 
 /// A span representing a timed sub-operation within a transaction.
@@ -579,6 +621,9 @@ class SightpaneTransaction {
     if (status != null) this.status = status;
     for (final c in _children) {
       if (!c.isFinished) c.finish();
+    }
+    if (Sightpane.currentTransaction == this) {
+      Sightpane.currentTransaction = null;
     }
     client._enqueue(
       SightpaneItem.transaction(
