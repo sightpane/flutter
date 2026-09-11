@@ -9,6 +9,11 @@ Map<String, Object?> osInfo() {
   final ua = web.window.navigator.userAgent;
   final b = parseBrowser(ua);
   final o = parseWebOS(ua);
+  int? cores;
+  try {
+    final c = web.window.navigator.hardwareConcurrency;
+    if (c > 0) cores = c;
+  } catch (_) {}
   return {
     'platform_category': 'web',
     'os': o.name,
@@ -17,6 +22,6 @@ Map<String, Object?> osInfo() {
     'browser': b.name,
     'browser_version': b.version,
     'arch': parseWebArch(ua),
-    'cpu_cores': web.window.navigator.hardwareConcurrency,
+    'cpu_cores': cores,
   };
 }
