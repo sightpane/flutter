@@ -40,3 +40,6 @@ export 'src/widgets/user_interaction.dart'
 export 'src/surveys/survey_overlay.dart'
     show SightpaneSurveyCard, SurveyPrompt, SurveyAnswer, SurveyType;
 export 'src/crons/crons.dart' show CronCheckinClient;
+export 'src/profiling/profiler.dart'
+    show ProfileFrame, ProfileSample, ProfileData, SightpaneProfileSampler;
+

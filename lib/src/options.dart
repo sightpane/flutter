@@ -89,6 +89,7 @@ class SightpaneOptions {
     this.sessionSampleRate = 1.0,
     this.errorSampleRate = 1.0,
     this.tracesSampleRate = 1.0,
+    this.profilesSampleRate = 0.0,
     this.scrub,
   });
 
@@ -117,6 +118,10 @@ class SightpaneOptions {
 
   /// Sampling rate for performance transactions/spans (0.0 to 1.0).
   final double tracesSampleRate;
+
+  /// Sampling rate for continuous CPU profiling during transactions (0.0 to 1.0).
+  final double profilesSampleRate;
+
 
   /// Backend root address, e.g. `http://localhost:8790`.
   final String endpoint;

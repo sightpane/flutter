@@ -217,8 +217,26 @@ class SightpaneItem {
     if (spans.isNotEmpty) 'spans': spans,
   });
 
+  factory SightpaneItem.profile({
+
+    required String transactionName,
+    required double durationMs,
+    required double cpuTimeMs,
+    required Map<String, Object?> profileData,
+    String threadName = 'main',
+    String? traceId,
+    DateTime? ts,
+  }) => SightpaneItem._('profile', ts ?? DateTime.now().toUtc(), {
+    'transaction_name': transactionName,
+    'duration_ms': durationMs,
+    'cpu_time_ms': cpuTimeMs,
+    'thread_name': threadName,
+    'profile_data': profileData,
+    'trace_id': ?traceId,
+  });
 
   final String type;
+
   final DateTime ts;
   final Map<String, Object?> body;
 

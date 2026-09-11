@@ -11,6 +11,7 @@ import 'device.dart';
 import 'lifecycle.dart';
 import 'models.dart';
 import 'options.dart';
+import 'profiling/profiler.dart';
 import 'queue.dart';
 import 'replay/recorder.dart';
 import 'session.dart';
@@ -140,11 +141,20 @@ class Sightpane {
     String name, {
     String op = 'custom',
     Map<String, Object?> tags = const {},
+    bool? profile,
   }) {
-    final tx = client.startTransaction(name, op: op, tags: tags);
+    final tx = client.startTransaction(name, op: op, tags: tags, profile: profile);
     currentTransaction = tx;
     return tx;
   }
+
+  /// Runs an async block while profiling execution.
+  static Future<T> profile<T>(
+    String name,
+    Future<T> Function() block, {
+    String op = 'profile',
+    Map<String, Object?> tags = const {},
+  }) => client.profile(name, block, op: op, tags: tags);
 
   /// Records a heartbeat check-in for a scheduled cron job or background worker.
   static Future<bool> checkin(
@@ -415,7 +425,41 @@ class SightpaneClient {
     String name, {
     String op = 'custom',
     Map<String, Object?> tags = const {},
-  }) => SightpaneTransaction(client: this, name: name, op: op, tags: tags);
+    bool? profile,
+  }) {
+    final tx = SightpaneTransaction(client: this, name: name, op: op, tags: tags);
+    final doProfile = profile ?? shouldSampleProfile();
+    if (doProfile) {
+      tx.sampler = SightpaneProfileSampler(
+        transactionName: name,
+        traceId: tx.traceId,
+      )..start();
+    }
+    return tx;
+  }
+
+  /// Whether continuous profiling should be sampled for a transaction.
+  bool shouldSampleProfile() {
+    if (options.profilesSampleRate <= 0.0) return false;
+    if (options.profilesSampleRate >= 1.0) return true;
+    return _random.nextDouble() < options.profilesSampleRate;
+  }
+
+  /// Runs an async block while profiling execution.
+  Future<T> profile<T>(
+    String name,
+    Future<T> Function() block, {
+    String op = 'profile',
+    Map<String, Object?> tags = const {},
+  }) async {
+    final tx = startTransaction(name, op: op, tags: tags, profile: true);
+    try {
+      return await block();
+    } finally {
+      tx.finish();
+    }
+  }
+
 
   /// Records a completed span.
   void recordSpan({
@@ -595,6 +639,7 @@ class SightpaneTransaction {
   final Map<String, Object?> tags;
   final Stopwatch _stopwatch;
   final List<SightpaneSpan> _children = [];
+  SightpaneProfileSampler? sampler;
   double? durationMs;
   String status = 'ok';
   bool _finished = false;
@@ -625,6 +670,12 @@ class SightpaneTransaction {
     if (Sightpane.currentTransaction == this) {
       Sightpane.currentTransaction = null;
     }
+    if (sampler != null) {
+      final profileItem = sampler!.stop(durationMs: durationMs!);
+      if (profileItem != null) {
+        client._enqueue(profileItem);
+      }
+    }
     client._enqueue(
       SightpaneItem.transaction(
         op: op,
@@ -639,5 +690,6 @@ class SightpaneTransaction {
       ),
     );
   }
+
 }
 
