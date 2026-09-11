@@ -201,10 +201,16 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
   void initState() {
     super.initState();
     _textController = TextEditingController();
+    _textController.addListener(_onTextChanged);
+  }
+
+  void _onTextChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _textController.removeListener(_onTextChanged);
     _textController.dispose();
     super.dispose();
   }
@@ -252,7 +258,7 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final bg = widget.backgroundColor ?? (isDark ? const Color(0xFF1E1E24) : Colors.white);
-    final accent = widget.accentColor ?? theme.primaryColor;
+    final accent = widget.accentColor ?? theme.colorScheme.primary;
 
     return Material(
       color: Colors.transparent,
@@ -313,17 +319,24 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
             const SizedBox(height: 14),
             _buildInputControl(accent),
             const SizedBox(height: 14),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: _canSubmit() ? _submit : null,
-                style: FilledButton.styleFrom(
-                  backgroundColor: accent,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                ),
-                child: const Text('Submit'),
-              ),
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _textController,
+              builder: (context, _, _) {
+                final canSubmit = _canSubmit();
+                return Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton(
+                    onPressed: canSubmit ? _submit : null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: accent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    child: const Text('Submit'),
+                  ),
+                );
+              },
             ),
           ],
         ),
@@ -671,6 +684,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
                 child: _submitted
                     ? _buildThankYouCard(context)
                     : SightpaneSurveyCard(
+                        key: ValueKey(_activeSurvey!.id),
                         prompt: _activeSurvey!.toPrompt(),
                         onSubmit: _handleSubmit,
                         onDismiss: _handleDismiss,
