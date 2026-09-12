@@ -9,10 +9,10 @@ Map<String, Object?> osInfo() {
 
   final map = <String, Object?>{
     'platform_category': category,
+    'app_type': category,
     'os': osDetails.name,
     'os_version': osDetails.version,
     'locale_name': Platform.localeName,
-    'browser': '${osDetails.name} app',
     'arch': arch,
     'cpu_cores': cores,
   };

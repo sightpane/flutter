@@ -16,6 +16,7 @@ Map<String, Object?> osInfo() {
   } catch (_) {}
   return {
     'platform_category': 'web',
+    'app_type': 'browser',
     'os': o.name,
     'os_version': o.version,
     'user_agent': ua,

@@ -12,6 +12,8 @@ void main() {
 
     expect(dev['platform'], isNotEmpty);
     expect(dev['platform_category'], anyOf('desktop', 'mobile', 'web'));
+    expect(dev['app_type'], anyOf('desktop', 'mobile', 'web'));
+    expect(dev.containsKey('browser'), isFalse);
     expect(dev['os'], isNotEmpty);
     expect(dev['arch'], isNotEmpty);
     expect(dev['cpu_cores'], isA<int>());

@@ -53,6 +53,8 @@ void main() {
       expect(env.props, {'location': 'NOVO'});
       expect(env.device['release'], '1.2.3');
       expect(env.device['platform'], isNotEmpty);
+      expect(env.device['app_type'], 'desktop');
+      expect(env.device.containsKey('browser'), isFalse);
     },
   );
 

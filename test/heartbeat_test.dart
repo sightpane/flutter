@@ -39,8 +39,9 @@ void main() {
     },
   );
 
-  test('device info carries a browser label on every platform', () {
+  test('device info carries app_type and os', () {
     final d = SightpaneDevice.collect();
-    expect(d['browser'], isNotEmpty);
+    expect(d['app_type'], isNotEmpty);
+    expect(d['os'], isNotEmpty);
   });
 }
