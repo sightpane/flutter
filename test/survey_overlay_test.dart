@@ -223,4 +223,76 @@ void main() {
 
     await Sightpane.close();
   });
+
+  // The README mounts the overlay in MaterialApp.builder, which puts it beside
+  // the Navigator rather than under it: no Overlay above the card's TextField.
+  testWidgets('open text survey mounted in MaterialApp.builder can be typed into', (tester) async {
+    const survey = SightpaneSurvey(
+      id: 'srv_text',
+      name: 'Feedback',
+      type: SurveyType.openText,
+      question: 'What can we improve?',
+    );
+    var taps = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorObservers: [SightpaneNavigatorObserver()],
+        builder: (context, child) => SightpaneSurveyOverlay(
+          activeSurveys: const [survey],
+          child: child!,
+        ),
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: TextButton(onPressed: () => taps++, child: const Text('Under')),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('What can we improve?'), findsOneWidget);
+
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'More charts');
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('More charts'), findsOneWidget);
+
+    // The layer the card sits in must not swallow taps meant for the app.
+    await tester.tap(find.text('Under'));
+    expect(taps, 1);
+
+    await Sightpane.close();
+  });
+
+  testWidgets('the survey card stays above the on-screen keyboard', (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    addTearDown(tester.view.reset);
+    const survey = SightpaneSurvey(
+      id: 'srv_text',
+      name: 'Feedback',
+      type: SurveyType.openText,
+      question: 'What can we improve?',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SightpaneSurveyOverlay(
+          activeSurveys: const [survey],
+          child: child!,
+        ),
+        home: const Scaffold(body: Text('Home')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final card = tester.getRect(find.byType(SightpaneSurveyCard));
+    expect(card.bottom, lessThanOrEqualTo(800 - 300));
+
+    await Sightpane.close();
+  });
 }

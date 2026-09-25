@@ -677,28 +677,43 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       children: [
         widget.child,
         if (_activeSurvey != null)
-          Positioned(
-            left: isMobile ? 16 : null,
-            right: 16,
-            bottom: 16,
-            width: isMobile ? null : 380,
-            child: AnimatedSlide(
-              offset: _visible ? Offset.zero : const Offset(0, 1.2),
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOutCubic,
-              child: AnimatedOpacity(
-                opacity: _visible ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 250),
-                child: _submitted
-                    ? _buildThankYouCard(context)
-                    : SightpaneSurveyCard(
-                        key: ValueKey(_activeSurvey!.id),
-                        prompt: _activeSurvey!.toPrompt(),
-                        onSubmit: _handleSubmit,
-                        onDismiss: _handleDismiss,
-                        accentColor: widget.accentColor,
-                        backgroundColor: widget.backgroundColor,
+          // The card gets an Overlay of its own. Mounted in MaterialApp.builder,
+          // as the README shows, this widget sits beside the Navigator rather
+          // than under it, and the open-text TextField needs an Overlay
+          // ancestor for its selection handles and toolbar. Outside the card
+          // the layer is transparent to taps.
+          Positioned.fill(
+            child: Overlay.wrap(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: isMobile ? 16 : null,
+                    right: 16,
+                    // No Scaffold between here and the keyboard to lift the
+                    // card, so it moves up by the keyboard's height itself.
+                    bottom: 16 + MediaQuery.viewInsetsOf(context).bottom,
+                    width: isMobile ? null : 380,
+                    child: AnimatedSlide(
+                      offset: _visible ? Offset.zero : const Offset(0, 1.2),
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedOpacity(
+                        opacity: _visible ? 1.0 : 0.0,
+                        duration: const Duration(milliseconds: 250),
+                        child: _submitted
+                            ? _buildThankYouCard(context)
+                            : SightpaneSurveyCard(
+                                key: ValueKey(_activeSurvey!.id),
+                                prompt: _activeSurvey!.toPrompt(),
+                                onSubmit: _handleSubmit,
+                                onDismiss: _handleDismiss,
+                                accentColor: widget.accentColor,
+                                backgroundColor: widget.backgroundColor,
+                              ),
                       ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
