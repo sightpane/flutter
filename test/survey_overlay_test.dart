@@ -398,6 +398,110 @@ void main() {
 
     await Sightpane.close();
   });
+
+  group('surveys activated while the app runs', () {
+    const listed = '{"surveys":[{"id":3,"type":"nps","question":"Newly active?",'
+        '"targeting":{},"active":true}]}';
+
+    testWidgets('are fetched again on navigation once the list is a minute old', (tester) async {
+      var served = '{"surveys":[]}';
+      var requests = 0;
+
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Home'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+
+        served = listed;
+        Sightpane.currentRoute = '/a';
+        await tester.pumpAndSettle();
+        expect(requests, 1, reason: 'the list is still fresh');
+        expect(find.text('Newly active?'), findsNothing);
+
+        await tester.pump(const Duration(minutes: 1));
+        Sightpane.currentRoute = '/b';
+        await tester.pumpAndSettle();
+        expect(requests, 2);
+        expect(find.text('Newly active?'), findsOneWidget);
+      }, (_) async {
+        requests++;
+        return http.Response(served, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('are fetched again when the app comes back to the foreground', (tester) async {
+      var served = '{"surveys":[]}';
+      var requests = 0;
+
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Home'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+
+        served = listed;
+        // Away and back, one legal step at a time.
+        for (final state in const [
+          AppLifecycleState.inactive,
+          AppLifecycleState.hidden,
+          AppLifecycleState.paused,
+          AppLifecycleState.hidden,
+          AppLifecycleState.inactive,
+          AppLifecycleState.resumed,
+        ]) {
+          tester.binding.handleAppLifecycleStateChanged(state);
+        }
+        await tester.pumpAndSettle();
+        expect(requests, 2);
+        expect(find.text('Newly active?'), findsOneWidget);
+      }, (_) async {
+        requests++;
+        return http.Response(served, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('a failed refetch keeps the surveys already fetched', (tester) async {
+      var status = 200;
+
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Home'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Shown only on /checkout, so it is still waiting when the refetch
+        // (on the way to /cart) fails.
+        status = 503;
+        await tester.pump(const Duration(minutes: 1));
+        Sightpane.currentRoute = '/cart';
+        await tester.pumpAndSettle();
+        Sightpane.currentRoute = '/checkout';
+        await tester.pumpAndSettle();
+        expect(find.text('Only at checkout?'), findsOneWidget);
+      }, (_) async => status == 200
+          ? http.Response(
+              '{"surveys":[{"id":4,"type":"nps","question":"Only at checkout?",'
+              '"targeting":{"url_pattern":"/checkout"},"active":true}]}',
+              200,
+            )
+          : http.Response('{"error":"unavailable"}', status));
+
+      await Sightpane.close();
+    });
+  });
 }
 
 // The SDK opens a fresh http.Client() for every survey request; inside

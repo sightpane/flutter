@@ -12,6 +12,7 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import '../client.dart';
 import '../models.dart';
@@ -539,6 +540,12 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   final math.Random _random = math.Random();
   Timer? _dismissTimer;
   StreamSubscription<String>? _events;
+  AppLifecycleListener? _lifecycle;
+
+  /// How old the fetched list may get before a route change fetches it again.
+  static const _refreshAfter = Duration(minutes: 1);
+  DateTime? _fetchedAt;
+  bool _fetching = false;
 
   @override
   void initState() {
@@ -551,6 +558,10 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
     }
     Sightpane.maybeClient?.routeNotifier.addListener(_onRouteChanged);
     _events = Sightpane.maybeClient?.capturedEvents.listen(_onEvent);
+    // A survey activated in the dashboard while the app runs shows up without
+    // a restart: the list is fetched again on resume, and on a route change
+    // once it is a minute old.
+    _lifecycle = AppLifecycleListener(onResume: _fetchSurveys);
   }
 
   @override
@@ -566,28 +577,34 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   void dispose() {
     _dismissTimer?.cancel();
     _events?.cancel();
+    _lifecycle?.dispose();
     Sightpane.maybeClient?.routeNotifier.removeListener(_onRouteChanged);
     super.dispose();
   }
 
   Future<void> _fetchSurveys() async {
+    final client = Sightpane.maybeClient;
+    if (client == null || _fetching || widget.activeSurveys != null) return;
+    _fetching = true;
+    _fetchedAt = clock.now();
     try {
-      final client = Sightpane.maybeClient;
-      if (client != null) {
-        final fetched = await client.fetchActiveSurveys();
-        if (mounted) {
-          setState(() {
-            _surveys = fetched;
-          });
-          _evaluateTargeting(client.currentRoute);
-        }
-      }
-    } catch (_) {
-      // Ignore network errors on survey fetch
+      // Null when the request failed: keep the list fetched before.
+      final fetched = await fetchSurveysOrNull(client);
+      if (!mounted || fetched == null) return;
+      setState(() {
+        _surveys = fetched;
+      });
+      _evaluateTargeting(client.currentRoute);
+    } finally {
+      _fetching = false;
     }
   }
 
   void _onRouteChanged() {
+    final fetchedAt = _fetchedAt;
+    if (fetchedAt != null && clock.now().difference(fetchedAt) >= _refreshAfter) {
+      _fetchSurveys();
+    }
     final route = Sightpane.maybeClient?.currentRoute;
     _evaluateTargeting(route);
   }

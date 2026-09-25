@@ -578,8 +578,13 @@ class SightpaneClient {
     await _capturedEvents.close();
   }
 
-  /// Fetches active surveys for the configured project.
-  Future<List<SightpaneSurvey>> fetchActiveSurveys({http.Client? client}) async {
+  /// Fetches active surveys for the configured project; empty when the
+  /// request fails.
+  Future<List<SightpaneSurvey>> fetchActiveSurveys({http.Client? client}) async =>
+      await _fetchSurveys(client: client) ?? const [];
+
+  /// Null when the request failed, unlike [fetchActiveSurveys].
+  Future<List<SightpaneSurvey>?> _fetchSurveys({http.Client? client}) async {
     final ep = options.endpoint.replaceFirst(RegExp(r'/+$'), '');
     final uri = Uri.parse('$ep/api/v1/surveys/active');
     final httpClient = client ?? http.Client();
@@ -607,12 +612,12 @@ class SightpaneClient {
           '[Sightpane] fetchActiveSurveys: HTTP ${res.statusCode} ${_clip(res.body)}',
         );
       }
-      return const [];
+      return null;
     } catch (e) {
       if (options.debug) {
         debugPrint('[Sightpane] fetchActiveSurveys failed: $e');
       }
-      return const [];
+      return null;
     } finally {
       if (shouldClose) httpClient.close();
     }
@@ -673,6 +678,12 @@ class SightpaneClient {
     }
   }
 }
+
+/// The active surveys, or null when the request failed, so the survey overlay
+/// can keep the list it has rather than empty it on a network error. Not
+/// exported from the package.
+Future<List<SightpaneSurvey>?> fetchSurveysOrNull(SightpaneClient c) =>
+    c._fetchSurveys();
 
 /// A response body short enough for a log line.
 String _clip(String body) =>
