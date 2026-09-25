@@ -602,6 +602,10 @@ class SightpaneClient {
               .map(SightpaneSurvey.fromJson)
               .toList();
         }
+      } else if (options.debug) {
+        debugPrint(
+          '[Sightpane] fetchActiveSurveys: HTTP ${res.statusCode} ${_clip(res.body)}',
+        );
       }
       return const [];
     } catch (e) {
@@ -614,7 +618,8 @@ class SightpaneClient {
     }
   }
 
-  /// Submits an answer for the given survey ID.
+  /// Submits an answer for the given survey ID; `true` once the backend has
+  /// stored it.
   Future<bool> submitSurveyResponse({
     required String surveyId,
     int? score,
@@ -626,6 +631,11 @@ class SightpaneClient {
     final httpClient = client ?? http.Client();
     final shouldClose = client == null;
     try {
+      // The answer names this session, which the backend only knows once an
+      // envelope for it has arrived. The first one leaves up to flushInterval
+      // after launch, and a survey shown at launch can be answered sooner.
+      await flush();
+
       final body = <String, dynamic>{
         'session_id': session.id,
         'user_id': session.user?.id ?? '',
@@ -646,7 +656,13 @@ class SightpaneClient {
           )
           .timeout(const Duration(seconds: 10));
 
-      return res.statusCode == 201 || res.statusCode == 200;
+      final ok = res.statusCode == 201 || res.statusCode == 200;
+      if (!ok && options.debug) {
+        debugPrint(
+          '[Sightpane] submitSurveyResponse: HTTP ${res.statusCode} ${_clip(res.body)}',
+        );
+      }
+      return ok;
     } catch (e) {
       if (options.debug) {
         debugPrint('[Sightpane] submitSurveyResponse failed: $e');
@@ -657,6 +673,10 @@ class SightpaneClient {
     }
   }
 }
+
+/// A response body short enough for a log line.
+String _clip(String body) =>
+    body.length <= 200 ? body : '${body.substring(0, 200)}…';
 
 String _randomHex(int byteLength) {
   final rnd = math.Random();

@@ -180,6 +180,8 @@ class SightpaneSurveyCard extends StatefulWidget {
     this.onDismiss,
     this.accentColor,
     this.backgroundColor,
+    this.sending = false,
+    this.errorText,
   });
 
   final SurveyPrompt prompt;
@@ -187,6 +189,12 @@ class SightpaneSurveyCard extends StatefulWidget {
   final VoidCallback? onDismiss;
   final Color? accentColor;
   final Color? backgroundColor;
+
+  /// Disables Submit while an answer is on its way, so it is not sent twice.
+  final bool sending;
+
+  /// Shown above Submit, e.g. when sending the last answer failed.
+  final String? errorText;
 
   @override
   State<SightpaneSurveyCard> createState() => _SightpaneSurveyCardState();
@@ -319,10 +327,17 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
             const SizedBox(height: 14),
             _buildInputControl(accent),
             const SizedBox(height: 14),
+            if (widget.errorText != null) ...[
+              Text(
+                widget.errorText!,
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+              ),
+              const SizedBox(height: 8),
+            ],
             ValueListenableBuilder<TextEditingValue>(
               valueListenable: _textController,
               builder: (context, _, _) {
-                final canSubmit = _canSubmit();
+                final canSubmit = _canSubmit() && !widget.sending;
                 return Align(
                   alignment: Alignment.centerRight,
                   child: FilledButton(
@@ -518,6 +533,8 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   SightpaneSurvey? _activeSurvey;
   bool _visible = false;
   bool _submitted = false;
+  bool _sending = false;
+  bool _sendFailed = false;
   final Set<String> _dismissedOrCompleted = <String>{};
   final math.Random _random = math.Random();
   Timer? _dismissTimer;
@@ -631,18 +648,37 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   }
 
   Future<void> _handleSubmit(SurveyAnswer answer) async {
+    if (_sending) return;
     final surveyId = _activeSurvey?.id ?? answer.surveyId;
-    _dismissedOrCompleted.add(surveyId);
+    setState(() {
+      _sending = true;
+      _sendFailed = false;
+    });
 
-    // Call backend
-    await Sightpane.maybeClient?.submitSurveyResponse(
-      surveyId: surveyId,
-      score: answer.score,
-      responseText: answer.responseText,
-    );
+    final sent = await Sightpane.maybeClient?.submitSurveyResponse(
+          surveyId: surveyId,
+          score: answer.score,
+          responseText: answer.responseText,
+        ) ??
+        false;
 
     if (!mounted) return;
+    if (_activeSurvey?.id != surveyId) {
+      // Dismissed while it was on its way; another survey may be showing now.
+      setState(() => _sending = false);
+      return;
+    }
+    if (!sent) {
+      // The card stays with the answer still selected, so Submit is the retry.
+      setState(() {
+        _sending = false;
+        _sendFailed = true;
+      });
+      return;
+    }
+    _dismissedOrCompleted.add(surveyId);
     setState(() {
+      _sending = false;
       _submitted = true;
     });
 
@@ -663,6 +699,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
         setState(() {
           _activeSurvey = null;
           _submitted = false;
+          _sendFailed = false;
         });
       }
     });
@@ -709,6 +746,10 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
                                 onDismiss: _handleDismiss,
                                 accentColor: widget.accentColor,
                                 backgroundColor: widget.backgroundColor,
+                                sending: _sending,
+                                errorText: _sendFailed
+                                    ? 'Could not send your answer. Please try again.'
+                                    : null,
                               ),
                       ),
                     ),

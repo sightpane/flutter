@@ -3,8 +3,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sightpane/sightpane.dart';
 
 import 'fake_transport.dart';
@@ -143,11 +147,13 @@ void main() {
     // Now survey card is visible
     expect(find.text('How was checkout?'), findsOneWidget);
 
-    // Submit answer
-    await tester.enterText(find.byType(TextField), 'Very smooth!');
-    await tester.pump();
-    await tester.tap(find.text('Submit'));
-    await tester.pumpAndSettle();
+    // Submit answer; the backend accepts it
+    await withHttp(() async {
+      await tester.enterText(find.byType(TextField), 'Very smooth!');
+      await tester.pump();
+      await tester.tap(find.text('Submit'));
+      await tester.pumpAndSettle();
+    }, (_) async => http.Response('{}', 201));
 
     // Thank you card appears
     expect(find.text('Thank you for your feedback!'), findsOneWidget);
@@ -295,4 +301,107 @@ void main() {
 
     await Sightpane.close();
   });
+
+  test('submitting an answer first sends what is queued, so the session exists', () async {
+    Sightpane.capture('opened_settings');
+    var envelopesBeforeSubmit = -1;
+    Map<String, Object?>? body;
+
+    final ok = await Sightpane.client.submitSurveyResponse(
+      surveyId: '7',
+      score: 9,
+      client: MockClient((req) async {
+        envelopesBeforeSubmit = t.envelopes.length;
+        body = jsonDecode(req.body) as Map<String, Object?>;
+        return http.Response('{}', 201);
+      }),
+    );
+
+    expect(ok, isTrue);
+    expect(envelopesBeforeSubmit, 1);
+    expect(body!['session_id'], t.envelopes.single.sessionId);
+    expect(body!['score'], 9);
+  });
+
+  test('a refused fetch or submit is logged when debug is on', () async {
+    await Sightpane.init(
+      SightpaneOptions(
+        endpoint: 'http://x',
+        apiKey: 'k',
+        transport: FakeTransport(),
+        flushInterval: const Duration(days: 1),
+        captureFlutterErrors: false,
+        replay: const SightpaneReplayOptions(enabled: false),
+        debug: true,
+      ),
+    );
+    final logged = <String>[];
+    final previous = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) => logged.add(message ?? '');
+    addTearDown(() => debugPrint = previous);
+    final refuse = MockClient(
+      (_) async => http.Response('{"error":"unknown api key"}', 401),
+    );
+
+    expect(await Sightpane.fetchActiveSurveys(client: refuse), isEmpty);
+    expect(
+      await Sightpane.submitSurveyResponse(surveyId: '7', score: 9, client: refuse),
+      isFalse,
+    );
+
+    expect(logged.where((l) => l.contains('401')), hasLength(2));
+  });
+
+  testWidgets('a failed submit keeps the card to try again instead of thanking', (tester) async {
+    const survey = SightpaneSurvey(
+      id: 'srv_nps',
+      name: 'NPS',
+      type: SurveyType.nps,
+      question: 'Recommend us?',
+    );
+    var status = 500;
+    var requests = 0;
+
+    await withHttp(() async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SightpaneSurveyOverlay(
+            activeSurveys: [survey],
+            child: Scaffold(body: Text('Home')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('9'));
+      await tester.pump();
+      await tester.tap(find.text('Submit'));
+      await tester.pumpAndSettle();
+
+      expect(requests, 1);
+      expect(find.text('Thank you for your feedback!'), findsNothing);
+      expect(find.text('Recommend us?'), findsOneWidget);
+      expect(find.textContaining('Could not send'), findsOneWidget);
+
+      // The score is still selected; Submit again is the retry.
+      status = 201;
+      await tester.tap(find.text('Submit'));
+      await tester.pumpAndSettle();
+
+      expect(requests, 2);
+      expect(find.text('Thank you for your feedback!'), findsOneWidget);
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+    }, (_) async {
+      requests++;
+      return http.Response('{}', status);
+    });
+
+    await Sightpane.close();
+  });
 }
+
+// The SDK opens a fresh http.Client() for every survey request; inside
+// runWithClient that is this mock instead of a real socket, which the test
+// binding would answer with 400.
+Future<T> withHttp<T>(Future<T> Function() body, MockClientHandler handler) =>
+    http.runWithClient(body, () => MockClient(handler));
