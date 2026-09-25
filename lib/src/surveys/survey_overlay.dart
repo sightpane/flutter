@@ -73,7 +73,11 @@ class SurveyTargeting {
 
     if (cleanPattern.endsWith('*')) {
       final prefix = cleanPattern.substring(0, cleanPattern.length - 1);
-      return cleanCurrent.startsWith(prefix);
+      if (cleanCurrent.startsWith(prefix)) return true;
+      // `/checkout/*` covers `/checkout` itself too.
+      return prefix.length > 1 &&
+          prefix.endsWith('/') &&
+          normCurrent == prefix.substring(0, prefix.length - 1);
     }
     return false;
   }

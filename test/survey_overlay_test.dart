@@ -117,6 +117,20 @@ void main() {
     expect(t3.matchesRoute('/anything'), isTrue);
   });
 
+  test('a /path/* pattern also matches the bare /path', () {
+    const t = SurveyTargeting(urlPattern: '/checkout/*');
+    expect(t.matchesRoute('/checkout'), isTrue);
+    expect(t.matchesRoute('/checkout/'), isTrue);
+    expect(t.matchesRoute('#/checkout'), isTrue);
+    expect(t.matchesRoute('/checkout/success'), isTrue);
+    expect(t.matchesRoute('/checkouts'), isFalse);
+    expect(t.matchesRoute('/cart'), isFalse);
+
+    const everything = SurveyTargeting(urlPattern: '/*');
+    expect(everything.matchesRoute('/'), isTrue);
+    expect(everything.matchesRoute('/cart'), isTrue);
+  });
+
   testWidgets('SightpaneSurveyOverlay displays survey when route matches', (tester) async {
     const survey = SightpaneSurvey(
       id: 'srv_checkout',
