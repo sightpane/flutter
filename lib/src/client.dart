@@ -289,6 +289,13 @@ class SightpaneClient {
   final ValueNotifier<String?> routeNotifier = ValueNotifier<String?>(null);
   String? _currentRoute;
 
+  /// The name of every event passed to [capture], as it happens; this is what
+  /// shows a survey whose targeting has an event trigger. A stream rather than
+  /// a notifier because the same event twice in a row must fire twice.
+  Stream<String> get capturedEvents => _capturedEvents.stream;
+  final StreamController<String> _capturedEvents =
+      StreamController<String>.broadcast();
+
   /// The current route, as reported by the navigation observer.
   String? get currentRoute => _currentRoute;
   set currentRoute(String? val) {
@@ -373,8 +380,10 @@ class SightpaneClient {
     _enqueue(SightpaneItem.breadcrumb(scrubbed));
   }
 
-  void capture(String event, [Map<String, Object?> props = const {}]) =>
-      _enqueue(SightpaneItem.event(event, props: _scrubMap(props)));
+  void capture(String event, [Map<String, Object?> props = const {}]) {
+    _enqueue(SightpaneItem.event(event, props: _scrubMap(props)));
+    if (!_capturedEvents.isClosed) _capturedEvents.add(event);
+  }
 
   void identify(SightpaneUser user) {
     session.user = user;
@@ -566,6 +575,7 @@ class SightpaneClient {
     await queue.close();
     await transport.close();
     routeNotifier.dispose();
+    await _capturedEvents.close();
   }
 
   /// Fetches active surveys for the configured project.

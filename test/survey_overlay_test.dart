@@ -192,4 +192,35 @@ void main() {
 
     await Sightpane.close();
   });
+
+  testWidgets('an event-trigger survey is shown by capturing that event, and only that one', (tester) async {
+    const survey = SightpaneSurvey(
+      id: 'srv_buy',
+      name: 'After purchase',
+      type: SurveyType.nps,
+      question: 'How was buying?',
+      targeting: SurveyTargeting(eventTrigger: 'purchase'),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SightpaneSurveyOverlay(
+          activeSurveys: [survey],
+          child: Scaffold(body: Text('Shop')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('How was buying?'), findsNothing);
+
+    Sightpane.capture('signup');
+    await tester.pumpAndSettle();
+    expect(find.text('How was buying?'), findsNothing);
+
+    Sightpane.capture('purchase');
+    await tester.pumpAndSettle();
+    expect(find.text('How was buying?'), findsOneWidget);
+
+    await Sightpane.close();
+  });
 }

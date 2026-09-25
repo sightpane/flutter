@@ -521,6 +521,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   final Set<String> _dismissedOrCompleted = <String>{};
   final math.Random _random = math.Random();
   Timer? _dismissTimer;
+  StreamSubscription<String>? _events;
 
   @override
   void initState() {
@@ -532,6 +533,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       _fetchSurveys();
     }
     Sightpane.maybeClient?.routeNotifier.addListener(_onRouteChanged);
+    _events = Sightpane.maybeClient?.capturedEvents.listen(_onEvent);
   }
 
   @override
@@ -546,6 +548,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   @override
   void dispose() {
     _dismissTimer?.cancel();
+    _events?.cancel();
     Sightpane.maybeClient?.routeNotifier.removeListener(_onRouteChanged);
     super.dispose();
   }
@@ -572,6 +575,9 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
     _evaluateTargeting(route);
   }
 
+  void _onEvent(String event) =>
+      _evaluateTargeting(Sightpane.maybeClient?.currentRoute, event: event);
+
   /// Evaluates targeting rules against current route and event.
   void evaluateTargeting({String? route, String? event}) {
     _evaluateTargeting(route ?? Sightpane.maybeClient?.currentRoute, event: event);
@@ -586,12 +592,14 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       if (!survey.active) continue;
       if (_dismissedOrCompleted.contains(survey.id)) continue;
 
-      // Event trigger check
-      if (survey.targeting.eventTrigger != null &&
-          survey.targeting.eventTrigger!.isNotEmpty) {
-        if (event == null || event != survey.targeting.eventTrigger) {
-          continue;
-        }
+      // Event trigger check. An event only shows the surveys waiting for it:
+      // the others are shown on navigation, and rolling their sample rate again
+      // on every event would show them far more often than asked.
+      final trigger = survey.targeting.eventTrigger;
+      if (trigger != null && trigger.isNotEmpty) {
+        if (event != trigger) continue;
+      } else if (event != null) {
+        continue;
       }
 
       // Route check
