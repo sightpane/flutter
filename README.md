@@ -85,6 +85,49 @@ already installed. Every error carries the breadcrumbs at that moment, the curre
 route and a fresh frame number; on the backend the same exception with the same
 first three app frames becomes one "error group".
 
+## In-app surveys
+
+Surveys (NPS, CSAT, rating, single choice, open text) are created per project in
+the dashboard. `SightpaneSurveyOverlay` fetches the active ones and slides a card
+in at the bottom of the screen when a survey's targeting matches. Nothing is
+shown until the overlay is mounted, so put it in `builder:` around the other
+wrappers, once:
+
+```dart
+MaterialApp.router(
+  routerConfig: router, // go_router: observers: [SightpaneNavigatorObserver()]
+  builder: (context, child) => SightpaneSurveyOverlay(
+    child: SightpaneReplay(child: SightpaneUserInteractionWidget(child: child!)),
+  ),
+);
+```
+
+With a plain `MaterialApp`, pass the observer as
+`navigatorObservers: [SightpaneNavigatorObserver()]`. The targeting set in the
+dashboard works like this:
+
+- **URL pattern**: compared with the current route, the same one the heartbeat
+  reports. The observer takes it from the route's `settings.name`, which is the
+  path for `MaterialApp.routes`. For go_router it is the GoRoute's `name`, or its
+  `path` when it has none (relative, for a nested route). Pass
+  `SightpaneNavigatorObserver(routeNameOf: …)` to report something else.
+  `/checkout` matches that route, and `/checkout/*` matches it and everything
+  under it. Without the observer there is no route, and a survey with a URL
+  pattern never shows.
+- **Event trigger**: the survey shows when that event is captured.
+  `Sightpane.capture('purchase_success')` shows a survey whose trigger is
+  `purchase_success`, as long as its URL pattern, if it has one, matches too.
+- **Neither**: shown as soon as the list arrives.
+
+The list is fetched again when the app comes back to the foreground, and on
+navigation once it is a minute old, so a survey activated in the dashboard shows
+up without a restart. An answered or dismissed survey does not come back while
+the app runs; after a restart it can. The answer goes out after the envelopes
+still in the queue, so the backend already knows the session it belongs to. If
+the answer is not stored, the card stays with the answer still selected, and
+pressing Submit again retries. With `debug: true`, a refused fetch or answer is
+logged with its HTTP status.
+
 ## Example
 
 [`example/`](example) is a small till application that drives every part of this
@@ -157,6 +200,10 @@ Pass a fake transport with `SightpaneOptions.transport`; in widget tests call
   `POST /api/v1/envelope` in the browser's network tab.
 - Recording runs continuously; an error only triggers a fresh frame plus an
   immediate send.
+- A survey that never shows: check that `SightpaneSurveyOverlay` is mounted (see
+  [In-app surveys](#in-app-surveys)), that the survey is active, and that its URL
+  pattern matches the route the session reports. With `debug: true`, a refused
+  fetch is logged as `fetchActiveSurveys: HTTP …`.
 
 ## Limits
 
