@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'device_model_io.dart';
+
 /// Native platforms: collect structured OS, kernel, platform category, and hardware info.
 Map<String, Object?> osInfo() {
   final category = _platformCategory();
@@ -16,6 +18,8 @@ Map<String, Object?> osInfo() {
     'arch': arch,
     'cpu_cores': cores,
   };
+
+  map.addAll(deviceModel());
 
   if (category == 'desktop' && Platform.isLinux) {
     map['kernel'] = _readKernelType();
@@ -49,13 +53,19 @@ _OsDetails _detectOS() {
     return _OsDetails(name, version);
   }
   if (Platform.isMacOS) {
-    final match = RegExp(r'Version\s+([0-9.]+)').firstMatch(Platform.operatingSystemVersion);
-    final version = match != null ? match.group(1)! : Platform.operatingSystemVersion;
+    final match = RegExp(r'Version\s+([0-9.]+)')
+        .firstMatch(Platform.operatingSystemVersion);
+    final version = match != null
+        ? match.group(1)!
+        : Platform.operatingSystemVersion;
     return _OsDetails('macOS', version);
   }
   if (Platform.isWindows) {
-    final match = RegExp(r'(?:Build\s+)?([0-9.]+)').firstMatch(Platform.operatingSystemVersion);
-    final version = match != null ? match.group(1)! : Platform.operatingSystemVersion;
+    final match = RegExp(r'(?:Build\s+)?([0-9.]+)')
+        .firstMatch(Platform.operatingSystemVersion);
+    final version = match != null
+        ? match.group(1)!
+        : Platform.operatingSystemVersion;
     return _OsDetails('Windows', version);
   }
   if (Platform.isAndroid) {
@@ -112,7 +122,8 @@ String _readKernelVersion() {
       if (s.isNotEmpty) return s;
     }
   } catch (_) {}
-  final match = RegExp(r'Linux\s+([^\s]+)').firstMatch(Platform.operatingSystemVersion);
+  final match = RegExp(r'Linux\s+([^\s]+)')
+      .firstMatch(Platform.operatingSystemVersion);
   if (match != null) return match.group(1)!;
   return Platform.operatingSystemVersion;
 }

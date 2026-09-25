@@ -77,6 +77,10 @@ class MyApp extends StatelessWidget {
   paused in the background) so the dashboard can show who is on which page right
   now. On web, `user_agent` / `browser` are added to the device info; visitors are
   counted per user + IP + browser.
+- On Android and iOS the device info carries `manufacturer`, `brand` and `model`
+  (read from the OS through `dart:ffi`, no plugin). Android adds `model_name` when
+  the maker sets a marketing name; an iPhone sends its identifier (`iPhone17,3`)
+  and the backend names it.
 - `Sightpane.flush()` / `Sightpane.close()`
 
 Starting through `appRunner` collects uncaught zone errors, `FlutterError.onError`
