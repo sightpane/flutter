@@ -12,6 +12,7 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import '../client.dart';
 import '../models.dart';
@@ -72,7 +73,11 @@ class SurveyTargeting {
 
     if (cleanPattern.endsWith('*')) {
       final prefix = cleanPattern.substring(0, cleanPattern.length - 1);
-      return cleanCurrent.startsWith(prefix);
+      if (cleanCurrent.startsWith(prefix)) return true;
+      // `/checkout/*` covers `/checkout` itself too.
+      return prefix.length > 1 &&
+          prefix.endsWith('/') &&
+          normCurrent == prefix.substring(0, prefix.length - 1);
     }
     return false;
   }
@@ -180,6 +185,8 @@ class SightpaneSurveyCard extends StatefulWidget {
     this.onDismiss,
     this.accentColor,
     this.backgroundColor,
+    this.sending = false,
+    this.errorText,
   });
 
   final SurveyPrompt prompt;
@@ -187,6 +194,12 @@ class SightpaneSurveyCard extends StatefulWidget {
   final VoidCallback? onDismiss;
   final Color? accentColor;
   final Color? backgroundColor;
+
+  /// Disables Submit while an answer is on its way, so it is not sent twice.
+  final bool sending;
+
+  /// Shown above Submit, e.g. when sending the last answer failed.
+  final String? errorText;
 
   @override
   State<SightpaneSurveyCard> createState() => _SightpaneSurveyCardState();
@@ -319,10 +332,17 @@ class _SightpaneSurveyCardState extends State<SightpaneSurveyCard> {
             const SizedBox(height: 14),
             _buildInputControl(accent),
             const SizedBox(height: 14),
+            if (widget.errorText != null) ...[
+              Text(
+                widget.errorText!,
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+              ),
+              const SizedBox(height: 8),
+            ],
             ValueListenableBuilder<TextEditingValue>(
               valueListenable: _textController,
               builder: (context, _, _) {
-                final canSubmit = _canSubmit();
+                final canSubmit = _canSubmit() && !widget.sending;
                 return Align(
                   alignment: Alignment.centerRight,
                   child: FilledButton(
@@ -518,9 +538,18 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   SightpaneSurvey? _activeSurvey;
   bool _visible = false;
   bool _submitted = false;
+  bool _sending = false;
+  bool _sendFailed = false;
   final Set<String> _dismissedOrCompleted = <String>{};
   final math.Random _random = math.Random();
   Timer? _dismissTimer;
+  StreamSubscription<String>? _events;
+  AppLifecycleListener? _lifecycle;
+
+  /// How old the fetched list may get before a route change fetches it again.
+  static const _refreshAfter = Duration(minutes: 1);
+  DateTime? _fetchedAt;
+  bool _fetching = false;
 
   @override
   void initState() {
@@ -532,6 +561,11 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       _fetchSurveys();
     }
     Sightpane.maybeClient?.routeNotifier.addListener(_onRouteChanged);
+    _events = Sightpane.maybeClient?.capturedEvents.listen(_onEvent);
+    // A survey activated in the dashboard while the app runs shows up without
+    // a restart: the list is fetched again on resume, and on a route change
+    // once it is a minute old.
+    _lifecycle = AppLifecycleListener(onResume: _fetchSurveys);
   }
 
   @override
@@ -546,31 +580,41 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   @override
   void dispose() {
     _dismissTimer?.cancel();
+    _events?.cancel();
+    _lifecycle?.dispose();
     Sightpane.maybeClient?.routeNotifier.removeListener(_onRouteChanged);
     super.dispose();
   }
 
   Future<void> _fetchSurveys() async {
+    final client = Sightpane.maybeClient;
+    if (client == null || _fetching || widget.activeSurveys != null) return;
+    _fetching = true;
+    _fetchedAt = clock.now();
     try {
-      final client = Sightpane.maybeClient;
-      if (client != null) {
-        final fetched = await client.fetchActiveSurveys();
-        if (mounted) {
-          setState(() {
-            _surveys = fetched;
-          });
-          _evaluateTargeting(client.currentRoute);
-        }
-      }
-    } catch (_) {
-      // Ignore network errors on survey fetch
+      // Null when the request failed: keep the list fetched before.
+      final fetched = await fetchSurveysOrNull(client);
+      if (!mounted || fetched == null) return;
+      setState(() {
+        _surveys = fetched;
+      });
+      _evaluateTargeting(client.currentRoute);
+    } finally {
+      _fetching = false;
     }
   }
 
   void _onRouteChanged() {
+    final fetchedAt = _fetchedAt;
+    if (fetchedAt != null && clock.now().difference(fetchedAt) >= _refreshAfter) {
+      _fetchSurveys();
+    }
     final route = Sightpane.maybeClient?.currentRoute;
     _evaluateTargeting(route);
   }
+
+  void _onEvent(String event) =>
+      _evaluateTargeting(Sightpane.maybeClient?.currentRoute, event: event);
 
   /// Evaluates targeting rules against current route and event.
   void evaluateTargeting({String? route, String? event}) {
@@ -586,12 +630,14 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       if (!survey.active) continue;
       if (_dismissedOrCompleted.contains(survey.id)) continue;
 
-      // Event trigger check
-      if (survey.targeting.eventTrigger != null &&
-          survey.targeting.eventTrigger!.isNotEmpty) {
-        if (event == null || event != survey.targeting.eventTrigger) {
-          continue;
-        }
+      // Event trigger check. An event only shows the surveys waiting for it:
+      // the others are shown on navigation, and rolling their sample rate again
+      // on every event would show them far more often than asked.
+      final trigger = survey.targeting.eventTrigger;
+      if (trigger != null && trigger.isNotEmpty) {
+        if (event != trigger) continue;
+      } else if (event != null) {
+        continue;
       }
 
       // Route check
@@ -623,18 +669,37 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   }
 
   Future<void> _handleSubmit(SurveyAnswer answer) async {
+    if (_sending) return;
     final surveyId = _activeSurvey?.id ?? answer.surveyId;
-    _dismissedOrCompleted.add(surveyId);
+    setState(() {
+      _sending = true;
+      _sendFailed = false;
+    });
 
-    // Call backend
-    await Sightpane.maybeClient?.submitSurveyResponse(
-      surveyId: surveyId,
-      score: answer.score,
-      responseText: answer.responseText,
-    );
+    final sent = await Sightpane.maybeClient?.submitSurveyResponse(
+          surveyId: surveyId,
+          score: answer.score,
+          responseText: answer.responseText,
+        ) ??
+        false;
 
     if (!mounted) return;
+    if (_activeSurvey?.id != surveyId) {
+      // Dismissed while it was on its way; another survey may be showing now.
+      setState(() => _sending = false);
+      return;
+    }
+    if (!sent) {
+      // The card stays with the answer still selected, so Submit is the retry.
+      setState(() {
+        _sending = false;
+        _sendFailed = true;
+      });
+      return;
+    }
+    _dismissedOrCompleted.add(surveyId);
     setState(() {
+      _sending = false;
       _submitted = true;
     });
 
@@ -655,6 +720,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
         setState(() {
           _activeSurvey = null;
           _submitted = false;
+          _sendFailed = false;
         });
       }
     });
@@ -669,28 +735,47 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       children: [
         widget.child,
         if (_activeSurvey != null)
-          Positioned(
-            left: isMobile ? 16 : null,
-            right: 16,
-            bottom: 16,
-            width: isMobile ? null : 380,
-            child: AnimatedSlide(
-              offset: _visible ? Offset.zero : const Offset(0, 1.2),
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOutCubic,
-              child: AnimatedOpacity(
-                opacity: _visible ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 250),
-                child: _submitted
-                    ? _buildThankYouCard(context)
-                    : SightpaneSurveyCard(
-                        key: ValueKey(_activeSurvey!.id),
-                        prompt: _activeSurvey!.toPrompt(),
-                        onSubmit: _handleSubmit,
-                        onDismiss: _handleDismiss,
-                        accentColor: widget.accentColor,
-                        backgroundColor: widget.backgroundColor,
+          // The card gets an Overlay of its own. Mounted in MaterialApp.builder,
+          // as the README shows, this widget sits beside the Navigator rather
+          // than under it, and the open-text TextField needs an Overlay
+          // ancestor for its selection handles and toolbar. Outside the card
+          // the layer is transparent to taps.
+          Positioned.fill(
+            child: Overlay.wrap(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: isMobile ? 16 : null,
+                    right: 16,
+                    // No Scaffold between here and the keyboard to lift the
+                    // card, so it moves up by the keyboard's height itself.
+                    bottom: 16 + MediaQuery.viewInsetsOf(context).bottom,
+                    width: isMobile ? null : 380,
+                    child: AnimatedSlide(
+                      offset: _visible ? Offset.zero : const Offset(0, 1.2),
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedOpacity(
+                        opacity: _visible ? 1.0 : 0.0,
+                        duration: const Duration(milliseconds: 250),
+                        child: _submitted
+                            ? _buildThankYouCard(context)
+                            : SightpaneSurveyCard(
+                                key: ValueKey(_activeSurvey!.id),
+                                prompt: _activeSurvey!.toPrompt(),
+                                onSubmit: _handleSubmit,
+                                onDismiss: _handleDismiss,
+                                accentColor: widget.accentColor,
+                                backgroundColor: widget.backgroundColor,
+                                sending: _sending,
+                                errorText: _sendFailed
+                                    ? 'Could not send your answer. Please try again.'
+                                    : null,
+                              ),
                       ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

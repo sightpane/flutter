@@ -289,6 +289,13 @@ class SightpaneClient {
   final ValueNotifier<String?> routeNotifier = ValueNotifier<String?>(null);
   String? _currentRoute;
 
+  /// The name of every event passed to [capture], as it happens; this is what
+  /// shows a survey whose targeting has an event trigger. A stream rather than
+  /// a notifier because the same event twice in a row must fire twice.
+  Stream<String> get capturedEvents => _capturedEvents.stream;
+  final StreamController<String> _capturedEvents =
+      StreamController<String>.broadcast();
+
   /// The current route, as reported by the navigation observer.
   String? get currentRoute => _currentRoute;
   set currentRoute(String? val) {
@@ -373,8 +380,10 @@ class SightpaneClient {
     _enqueue(SightpaneItem.breadcrumb(scrubbed));
   }
 
-  void capture(String event, [Map<String, Object?> props = const {}]) =>
-      _enqueue(SightpaneItem.event(event, props: _scrubMap(props)));
+  void capture(String event, [Map<String, Object?> props = const {}]) {
+    _enqueue(SightpaneItem.event(event, props: _scrubMap(props)));
+    if (!_capturedEvents.isClosed) _capturedEvents.add(event);
+  }
 
   void identify(SightpaneUser user) {
     session.user = user;
@@ -566,10 +575,16 @@ class SightpaneClient {
     await queue.close();
     await transport.close();
     routeNotifier.dispose();
+    await _capturedEvents.close();
   }
 
-  /// Fetches active surveys for the configured project.
-  Future<List<SightpaneSurvey>> fetchActiveSurveys({http.Client? client}) async {
+  /// Fetches active surveys for the configured project; empty when the
+  /// request fails.
+  Future<List<SightpaneSurvey>> fetchActiveSurveys({http.Client? client}) async =>
+      await _fetchSurveys(client: client) ?? const [];
+
+  /// Null when the request failed, unlike [fetchActiveSurveys].
+  Future<List<SightpaneSurvey>?> _fetchSurveys({http.Client? client}) async {
     final ep = options.endpoint.replaceFirst(RegExp(r'/+$'), '');
     final uri = Uri.parse('$ep/api/v1/surveys/active');
     final httpClient = client ?? http.Client();
@@ -592,19 +607,24 @@ class SightpaneClient {
               .map(SightpaneSurvey.fromJson)
               .toList();
         }
+      } else if (options.debug) {
+        debugPrint(
+          '[Sightpane] fetchActiveSurveys: HTTP ${res.statusCode} ${_clip(res.body)}',
+        );
       }
-      return const [];
+      return null;
     } catch (e) {
       if (options.debug) {
         debugPrint('[Sightpane] fetchActiveSurveys failed: $e');
       }
-      return const [];
+      return null;
     } finally {
       if (shouldClose) httpClient.close();
     }
   }
 
-  /// Submits an answer for the given survey ID.
+  /// Submits an answer for the given survey ID; `true` once the backend has
+  /// stored it.
   Future<bool> submitSurveyResponse({
     required String surveyId,
     int? score,
@@ -616,6 +636,11 @@ class SightpaneClient {
     final httpClient = client ?? http.Client();
     final shouldClose = client == null;
     try {
+      // The answer names this session, which the backend only knows once an
+      // envelope for it has arrived. The first one leaves up to flushInterval
+      // after launch, and a survey shown at launch can be answered sooner.
+      await flush();
+
       final body = <String, dynamic>{
         'session_id': session.id,
         'user_id': session.user?.id ?? '',
@@ -636,7 +661,13 @@ class SightpaneClient {
           )
           .timeout(const Duration(seconds: 10));
 
-      return res.statusCode == 201 || res.statusCode == 200;
+      final ok = res.statusCode == 201 || res.statusCode == 200;
+      if (!ok && options.debug) {
+        debugPrint(
+          '[Sightpane] submitSurveyResponse: HTTP ${res.statusCode} ${_clip(res.body)}',
+        );
+      }
+      return ok;
     } catch (e) {
       if (options.debug) {
         debugPrint('[Sightpane] submitSurveyResponse failed: $e');
@@ -647,6 +678,16 @@ class SightpaneClient {
     }
   }
 }
+
+/// The active surveys, or null when the request failed, so the survey overlay
+/// can keep the list it has rather than empty it on a network error. Not
+/// exported from the package.
+Future<List<SightpaneSurvey>?> fetchSurveysOrNull(SightpaneClient c) =>
+    c._fetchSurveys();
+
+/// A response body short enough for a log line.
+String _clip(String body) =>
+    body.length <= 200 ? body : '${body.substring(0, 200)}…';
 
 String _randomHex(int byteLength) {
   final rnd = math.Random();

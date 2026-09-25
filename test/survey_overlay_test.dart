@@ -3,8 +3,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sightpane/sightpane.dart';
 
 import 'fake_transport.dart';
@@ -113,6 +117,20 @@ void main() {
     expect(t3.matchesRoute('/anything'), isTrue);
   });
 
+  test('a /path/* pattern also matches the bare /path', () {
+    const t = SurveyTargeting(urlPattern: '/checkout/*');
+    expect(t.matchesRoute('/checkout'), isTrue);
+    expect(t.matchesRoute('/checkout/'), isTrue);
+    expect(t.matchesRoute('#/checkout'), isTrue);
+    expect(t.matchesRoute('/checkout/success'), isTrue);
+    expect(t.matchesRoute('/checkouts'), isFalse);
+    expect(t.matchesRoute('/cart'), isFalse);
+
+    const everything = SurveyTargeting(urlPattern: '/*');
+    expect(everything.matchesRoute('/'), isTrue);
+    expect(everything.matchesRoute('/cart'), isTrue);
+  });
+
   testWidgets('SightpaneSurveyOverlay displays survey when route matches', (tester) async {
     const survey = SightpaneSurvey(
       id: 'srv_checkout',
@@ -143,11 +161,13 @@ void main() {
     // Now survey card is visible
     expect(find.text('How was checkout?'), findsOneWidget);
 
-    // Submit answer
-    await tester.enterText(find.byType(TextField), 'Very smooth!');
-    await tester.pump();
-    await tester.tap(find.text('Submit'));
-    await tester.pumpAndSettle();
+    // Submit answer; the backend accepts it
+    await withHttp(() async {
+      await tester.enterText(find.byType(TextField), 'Very smooth!');
+      await tester.pump();
+      await tester.tap(find.text('Submit'));
+      await tester.pumpAndSettle();
+    }, (_) async => http.Response('{}', 201));
 
     // Thank you card appears
     expect(find.text('Thank you for your feedback!'), findsOneWidget);
@@ -192,4 +212,314 @@ void main() {
 
     await Sightpane.close();
   });
+
+  testWidgets('an event-trigger survey is shown by capturing that event, and only that one', (tester) async {
+    const survey = SightpaneSurvey(
+      id: 'srv_buy',
+      name: 'After purchase',
+      type: SurveyType.nps,
+      question: 'How was buying?',
+      targeting: SurveyTargeting(eventTrigger: 'purchase'),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SightpaneSurveyOverlay(
+          activeSurveys: [survey],
+          child: Scaffold(body: Text('Shop')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('How was buying?'), findsNothing);
+
+    Sightpane.capture('signup');
+    await tester.pumpAndSettle();
+    expect(find.text('How was buying?'), findsNothing);
+
+    Sightpane.capture('purchase');
+    await tester.pumpAndSettle();
+    expect(find.text('How was buying?'), findsOneWidget);
+
+    await Sightpane.close();
+  });
+
+  // The README mounts the overlay in MaterialApp.builder, which puts it beside
+  // the Navigator rather than under it: no Overlay above the card's TextField.
+  testWidgets('open text survey mounted in MaterialApp.builder can be typed into', (tester) async {
+    const survey = SightpaneSurvey(
+      id: 'srv_text',
+      name: 'Feedback',
+      type: SurveyType.openText,
+      question: 'What can we improve?',
+    );
+    var taps = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorObservers: [SightpaneNavigatorObserver()],
+        builder: (context, child) => SightpaneSurveyOverlay(
+          activeSurveys: const [survey],
+          child: child!,
+        ),
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: TextButton(onPressed: () => taps++, child: const Text('Under')),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('What can we improve?'), findsOneWidget);
+
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'More charts');
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('More charts'), findsOneWidget);
+
+    // The layer the card sits in must not swallow taps meant for the app.
+    await tester.tap(find.text('Under'));
+    expect(taps, 1);
+
+    await Sightpane.close();
+  });
+
+  testWidgets('the survey card stays above the on-screen keyboard', (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    addTearDown(tester.view.reset);
+    const survey = SightpaneSurvey(
+      id: 'srv_text',
+      name: 'Feedback',
+      type: SurveyType.openText,
+      question: 'What can we improve?',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SightpaneSurveyOverlay(
+          activeSurveys: const [survey],
+          child: child!,
+        ),
+        home: const Scaffold(body: Text('Home')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final card = tester.getRect(find.byType(SightpaneSurveyCard));
+    expect(card.bottom, lessThanOrEqualTo(800 - 300));
+
+    await Sightpane.close();
+  });
+
+  test('submitting an answer first sends what is queued, so the session exists', () async {
+    Sightpane.capture('opened_settings');
+    var envelopesBeforeSubmit = -1;
+    Map<String, Object?>? body;
+
+    final ok = await Sightpane.client.submitSurveyResponse(
+      surveyId: '7',
+      score: 9,
+      client: MockClient((req) async {
+        envelopesBeforeSubmit = t.envelopes.length;
+        body = jsonDecode(req.body) as Map<String, Object?>;
+        return http.Response('{}', 201);
+      }),
+    );
+
+    expect(ok, isTrue);
+    expect(envelopesBeforeSubmit, 1);
+    expect(body!['session_id'], t.envelopes.single.sessionId);
+    expect(body!['score'], 9);
+  });
+
+  test('a refused fetch or submit is logged when debug is on', () async {
+    await Sightpane.init(
+      SightpaneOptions(
+        endpoint: 'http://x',
+        apiKey: 'k',
+        transport: FakeTransport(),
+        flushInterval: const Duration(days: 1),
+        captureFlutterErrors: false,
+        replay: const SightpaneReplayOptions(enabled: false),
+        debug: true,
+      ),
+    );
+    final logged = <String>[];
+    final previous = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) => logged.add(message ?? '');
+    addTearDown(() => debugPrint = previous);
+    final refuse = MockClient(
+      (_) async => http.Response('{"error":"unknown api key"}', 401),
+    );
+
+    expect(await Sightpane.fetchActiveSurveys(client: refuse), isEmpty);
+    expect(
+      await Sightpane.submitSurveyResponse(surveyId: '7', score: 9, client: refuse),
+      isFalse,
+    );
+
+    expect(logged.where((l) => l.contains('401')), hasLength(2));
+  });
+
+  testWidgets('a failed submit keeps the card to try again instead of thanking', (tester) async {
+    const survey = SightpaneSurvey(
+      id: 'srv_nps',
+      name: 'NPS',
+      type: SurveyType.nps,
+      question: 'Recommend us?',
+    );
+    var status = 500;
+    var requests = 0;
+
+    await withHttp(() async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SightpaneSurveyOverlay(
+            activeSurveys: [survey],
+            child: Scaffold(body: Text('Home')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('9'));
+      await tester.pump();
+      await tester.tap(find.text('Submit'));
+      await tester.pumpAndSettle();
+
+      expect(requests, 1);
+      expect(find.text('Thank you for your feedback!'), findsNothing);
+      expect(find.text('Recommend us?'), findsOneWidget);
+      expect(find.textContaining('Could not send'), findsOneWidget);
+
+      // The score is still selected; Submit again is the retry.
+      status = 201;
+      await tester.tap(find.text('Submit'));
+      await tester.pumpAndSettle();
+
+      expect(requests, 2);
+      expect(find.text('Thank you for your feedback!'), findsOneWidget);
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+    }, (_) async {
+      requests++;
+      return http.Response('{}', status);
+    });
+
+    await Sightpane.close();
+  });
+
+  group('surveys activated while the app runs', () {
+    const listed = '{"surveys":[{"id":3,"type":"nps","question":"Newly active?",'
+        '"targeting":{},"active":true}]}';
+
+    testWidgets('are fetched again on navigation once the list is a minute old', (tester) async {
+      var served = '{"surveys":[]}';
+      var requests = 0;
+
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Home'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+
+        served = listed;
+        Sightpane.currentRoute = '/a';
+        await tester.pumpAndSettle();
+        expect(requests, 1, reason: 'the list is still fresh');
+        expect(find.text('Newly active?'), findsNothing);
+
+        await tester.pump(const Duration(minutes: 1));
+        Sightpane.currentRoute = '/b';
+        await tester.pumpAndSettle();
+        expect(requests, 2);
+        expect(find.text('Newly active?'), findsOneWidget);
+      }, (_) async {
+        requests++;
+        return http.Response(served, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('are fetched again when the app comes back to the foreground', (tester) async {
+      var served = '{"surveys":[]}';
+      var requests = 0;
+
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Home'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+
+        served = listed;
+        // Away and back, one legal step at a time.
+        for (final state in const [
+          AppLifecycleState.inactive,
+          AppLifecycleState.hidden,
+          AppLifecycleState.paused,
+          AppLifecycleState.hidden,
+          AppLifecycleState.inactive,
+          AppLifecycleState.resumed,
+        ]) {
+          tester.binding.handleAppLifecycleStateChanged(state);
+        }
+        await tester.pumpAndSettle();
+        expect(requests, 2);
+        expect(find.text('Newly active?'), findsOneWidget);
+      }, (_) async {
+        requests++;
+        return http.Response(served, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('a failed refetch keeps the surveys already fetched', (tester) async {
+      var status = 200;
+
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Home'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Shown only on /checkout, so it is still waiting when the refetch
+        // (on the way to /cart) fails.
+        status = 503;
+        await tester.pump(const Duration(minutes: 1));
+        Sightpane.currentRoute = '/cart';
+        await tester.pumpAndSettle();
+        Sightpane.currentRoute = '/checkout';
+        await tester.pumpAndSettle();
+        expect(find.text('Only at checkout?'), findsOneWidget);
+      }, (_) async => status == 200
+          ? http.Response(
+              '{"surveys":[{"id":4,"type":"nps","question":"Only at checkout?",'
+              '"targeting":{"url_pattern":"/checkout"},"active":true}]}',
+              200,
+            )
+          : http.Response('{"error":"unavailable"}', status));
+
+      await Sightpane.close();
+    });
+  });
 }
+
+// The SDK opens a fresh http.Client() for every survey request; inside
+// runWithClient that is this mock instead of a real socket, which the test
+// binding would answer with 400.
+Future<T> withHttp<T>(Future<T> Function() body, MockClientHandler handler) =>
+    http.runWithClient(body, () => MockClient(handler));
