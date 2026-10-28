@@ -122,6 +122,12 @@ dashboard works like this:
   `Sightpane.capture('purchase_success')` shows a survey whose trigger is
   `purchase_success`, as long as its URL pattern, if it has one, matches too.
 - **Neither**: shown as soon as the list arrives.
+- **Show delay**: with a delay set in the dashboard (`delay_seconds`, up to an
+  hour), the survey waits that long after its trigger before it shows: "30
+  seconds after `purchase`". Capturing the event again does not restart the
+  wait. When the time is up the survey is skipped if the person has left the
+  page its URL pattern names, has already dismissed or answered it, or another
+  survey is on screen.
 
 The list is fetched again when the app comes back to the foreground, and on
 navigation or a captured event once it is a minute old, so a survey activated in
