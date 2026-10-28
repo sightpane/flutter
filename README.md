@@ -124,8 +124,9 @@ dashboard works like this:
 - **Neither**: shown as soon as the list arrives.
 
 The list is fetched again when the app comes back to the foreground, and on
-navigation once it is a minute old, so a survey activated in the dashboard shows
-up without a restart. An answered or dismissed survey does not come back while
+navigation or a captured event once it is a minute old, so a survey activated in
+the dashboard shows up without a restart. An event captured while the list is
+still loading, or due that refresh, is checked against the list that arrives. An answered or dismissed survey does not come back while
 the app runs; after a restart it can. The answer goes out after the envelopes
 still in the queue, so the backend already knows the session it belongs to. If
 the answer is not stored, the card stays with the answer still selected, and

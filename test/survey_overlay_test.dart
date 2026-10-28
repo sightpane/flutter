@@ -516,6 +516,137 @@ void main() {
       await Sightpane.close();
     });
   });
+
+  // Fetched rather than preloaded, in the shape the dashboard writes
+  // (ui `SurveyTargeting.toJson`) and the backend hands back.
+  group('event-trigger surveys from the backend', () {
+    const purchaseSurvey = '{"surveys":[{"id":7,"type":"nps",'
+        '"question":"How was buying?","active":true,'
+        '"targeting":{"event_trigger":"purchase","sample_rate":1}}]}';
+
+    testWidgets('are shown when that event is captured', (tester) async {
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('How was buying?'), findsNothing);
+
+        Sightpane.capture('purchase');
+        await tester.pumpAndSettle();
+        expect(find.text('How was buying?'), findsOneWidget);
+      }, (_) async => http.Response(purchaseSurvey, 200));
+
+      await Sightpane.close();
+    });
+
+    testWidgets('an event captured before the list has arrived still shows it', (tester) async {
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        // The first frame is up but the response has not arrived yet: an
+        // event captured at launch, e.g. app_open.
+        Sightpane.capture('purchase');
+        await tester.pumpAndSettle();
+        expect(find.text('How was buying?'), findsOneWidget);
+      }, (_) async {
+        // Answered a little later, as a real network does.
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        return http.Response(purchaseSurvey, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('one activated while the app runs is shown by its event, with no navigation', (tester) async {
+      var served = '{"surveys":[]}';
+      var requests = 0;
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+
+        // Created in the dashboard a while after launch; the app stays on the
+        // same screen and in the foreground, so neither a route change nor a
+        // resume fetches the list again.
+        served = purchaseSurvey;
+        await tester.pump(const Duration(minutes: 1));
+        Sightpane.capture('purchase');
+        await tester.pumpAndSettle();
+        expect(requests, 2);
+        expect(find.text('How was buying?'), findsOneWidget);
+      }, (_) async {
+        requests++;
+        return http.Response(served, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('an event after a failed first fetch retries and shows it', (tester) async {
+      var requests = 0;
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(requests, 1); // the launch fetch failed: no list at all
+
+        // Not hammering a backend that just failed: an event right away
+        // waits instead of asking again.
+        Sightpane.capture('purchase');
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+        expect(find.text('How was buying?'), findsNothing);
+
+        await tester.pump(const Duration(seconds: 11));
+        Sightpane.capture('purchase');
+        await tester.pumpAndSettle();
+        expect(requests, 2);
+        expect(find.text('How was buying?'), findsOneWidget);
+      }, (_) async {
+        requests++;
+        return requests == 1
+            ? http.Response('down', 500)
+            : http.Response(purchaseSurvey, 200);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('a fresh list is not fetched again on every event', (tester) async {
+      var requests = 0;
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        for (var i = 0; i < 5; i++) {
+          Sightpane.capture('tap');
+          await tester.pumpAndSettle();
+        }
+        expect(requests, 1);
+      }, (_) async {
+        requests++;
+        return http.Response('{"surveys":[]}', 200);
+      });
+
+      await Sightpane.close();
+    });
+  });
 }
 
 // The SDK opens a fresh http.Client() for every survey request; inside
