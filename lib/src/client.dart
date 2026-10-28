@@ -623,6 +623,79 @@ class SightpaneClient {
     }
   }
 
+  /// The server-scheduled surveys due for this person now; null when the
+  /// request failed. The backend knows a session only once an envelope for it
+  /// has arrived, so the queue is flushed first.
+  Future<List<SightpaneSurvey>?> _fetchDueSurveys({http.Client? client}) async {
+    final ep = options.endpoint.replaceFirst(RegExp(r'/+$'), '');
+    final uri = Uri.parse(
+      '$ep/api/v1/surveys/due',
+    ).replace(queryParameters: {'session': session.id});
+    final httpClient = client ?? http.Client();
+    final shouldClose = client == null;
+    try {
+      await flush();
+      final res = await httpClient.get(
+        uri,
+        headers: {
+          'X-Sightpane-Key': options.apiKey,
+          'X-Hog-Key': options.apiKey,
+        },
+      ).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        if (data is Map<String, dynamic> && data['surveys'] is List) {
+          return (data['surveys'] as List)
+              .whereType<Map<String, dynamic>>()
+              .map(SightpaneSurvey.fromJson)
+              .toList();
+        }
+      } else if (options.debug) {
+        debugPrint('[Sightpane] fetchDueSurveys: HTTP ${res.statusCode} ${_clip(res.body)}');
+      }
+      return null;
+    } catch (e) {
+      if (options.debug) {
+        debugPrint('[Sightpane] fetchDueSurveys failed: $e');
+      }
+      return null;
+    } finally {
+      if (shouldClose) httpClient.close();
+    }
+  }
+
+  Future<bool> _markSurveyShown(String surveyId, {http.Client? client}) async {
+    final ep = options.endpoint.replaceFirst(RegExp(r'/+$'), '');
+    final uri = Uri.parse('$ep/api/v1/surveys/$surveyId/shown');
+    final httpClient = client ?? http.Client();
+    final shouldClose = client == null;
+    try {
+      final res = await httpClient
+          .post(
+            uri,
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Sightpane-Key': options.apiKey,
+              'X-Hog-Key': options.apiKey,
+            },
+            body: jsonEncode({'session_id': session.id}),
+          )
+          .timeout(const Duration(seconds: 10));
+      final ok = res.statusCode == 204 || res.statusCode == 200;
+      if (!ok && options.debug) {
+        debugPrint('[Sightpane] markSurveyShown: HTTP ${res.statusCode} ${_clip(res.body)}');
+      }
+      return ok;
+    } catch (e) {
+      if (options.debug) {
+        debugPrint('[Sightpane] markSurveyShown failed: $e');
+      }
+      return false;
+    } finally {
+      if (shouldClose) httpClient.close();
+    }
+  }
+
   /// Submits an answer for the given survey ID; `true` once the backend has
   /// stored it.
   Future<bool> submitSurveyResponse({
@@ -678,6 +751,16 @@ class SightpaneClient {
     }
   }
 }
+
+/// The server-scheduled surveys due now for the person behind this session,
+/// or null when the request failed. Not exported from the package.
+Future<List<SightpaneSurvey>?> fetchDueSurveysOrNull(SightpaneClient c) =>
+    c._fetchDueSurveys();
+
+/// Tells the backend a server-scheduled survey was shown, so the trigger that
+/// made it due does not bring it back. Not exported from the package.
+Future<bool> markSurveyShown(SightpaneClient c, String surveyId) =>
+    c._markSurveyShown(surveyId);
 
 /// The active surveys, or null when the request failed, so the survey overlay
 /// can keep the list it has rather than empty it on a network error. Not

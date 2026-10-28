@@ -339,6 +339,87 @@ void main() {
     });
   });
 
+  group('server-scheduled surveys', () {
+    const serverSurvey = '{"surveys":[{"id":9,"type":"nps","question":"Still happy?",'
+        '"active":true,"targeting":{"event_trigger":"purchase","delay_seconds":30,'
+        '"server_scheduled":true,"url_pattern":"/checkout"}}]}';
+
+    test('read server_scheduled', () {
+      final s = SightpaneSurvey.fromJson(
+        (jsonDecode(serverSurvey) as Map<String, dynamic>)['surveys'][0]
+            as Map<String, dynamic>,
+      );
+      expect(s.targeting.serverScheduled, isTrue);
+      expect(s.targeting.toJson()['server_scheduled'], isTrue);
+    });
+
+    testWidgets('are not timed on the device but shown when due, on any page', (tester) async {
+      var dueBody = '{"surveys":[]}';
+      final paths = <String>[];
+      String? shownFor;
+      Sightpane.currentRoute = '/home';
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        // Asked once the list shows a server-scheduled survey.
+        expect(paths.where((p) => p.endsWith('/surveys/due')), hasLength(1));
+
+        // Its event does not start a timer here.
+        Sightpane.capture('purchase');
+        await tester.pump(const Duration(seconds: 15));
+        await tester.pumpAndSettle();
+        expect(find.text('Still happy?'), findsNothing);
+
+        // The backend says it is due: shown on /home, though it targets
+        // /checkout, and reported as shown.
+        dueBody = serverSurvey;
+        await tester.pump(const Duration(seconds: 20));
+        await tester.pumpAndSettle();
+        expect(find.text('Still happy?'), findsOneWidget);
+        expect(shownFor, Sightpane.maybeClient!.session.id);
+      }, (req) async {
+        paths.add(req.url.path);
+        if (req.url.path.endsWith('/surveys/active')) {
+          return http.Response(serverSurvey, 200);
+        }
+        if (req.url.path.endsWith('/surveys/due')) {
+          expect(req.url.queryParameters['session'], isNotEmpty);
+          return http.Response(dueBody, 200);
+        }
+        if (req.url.path.endsWith('/surveys/9/shown')) {
+          shownFor = (jsonDecode(req.body) as Map)['session_id'] as String;
+          return http.Response('', 204);
+        }
+        return http.Response('not found', 404);
+      });
+
+      await Sightpane.close();
+    });
+
+    testWidgets('due is never asked when no survey is server-scheduled', (tester) async {
+      final paths = <String>[];
+      await withHttp(() async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SightpaneSurveyOverlay(child: Scaffold(body: Text('Shop'))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(minutes: 1));
+        expect(paths.where((p) => p.endsWith('/surveys/due')), isEmpty);
+      }, (req) async {
+        paths.add(req.url.path);
+        return http.Response('{"surveys":[]}', 200);
+      });
+
+      await Sightpane.close();
+    });
+  });
+
   // The README mounts the overlay in MaterialApp.builder, which puts it beside
   // the Navigator rather than under it: no Overlay above the card's TextField.
   testWidgets('open text survey mounted in MaterialApp.builder can be typed into', (tester) async {

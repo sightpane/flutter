@@ -33,6 +33,7 @@ class SurveyTargeting {
     this.eventTrigger,
     this.sampleRate = 1.0,
     this.delaySeconds = 0,
+    this.serverScheduled = false,
   });
 
   final String? urlPattern;
@@ -43,12 +44,17 @@ class SurveyTargeting {
   /// page) before the survey shows; 0 is at once.
   final int delaySeconds;
 
+  /// The backend times this survey: it is shown when `/surveys/due` lists it,
+  /// on whatever page the person is, not by the SDK on its event.
+  final bool serverScheduled;
+
   factory SurveyTargeting.fromJson(Map<String, dynamic> json) {
     return SurveyTargeting(
       urlPattern: json['url_pattern'] as String?,
       eventTrigger: json['event_trigger'] as String?,
       sampleRate: (json['sample_rate'] as num?)?.toDouble() ?? 1.0,
       delaySeconds: (json['delay_seconds'] as num?)?.toInt() ?? 0,
+      serverScheduled: json['server_scheduled'] == true,
     );
   }
 
@@ -57,6 +63,7 @@ class SurveyTargeting {
     if (eventTrigger != null) 'event_trigger': eventTrigger,
     'sample_rate': sampleRate,
     if (delaySeconds > 0) 'delay_seconds': delaySeconds,
+    if (serverScheduled) 'server_scheduled': true,
   };
 
   bool matchesRoute(String? route) {
@@ -573,11 +580,18 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   /// not restart its wait.
   final Map<String, Timer> _delayed = <String, Timer>{};
 
+  /// While the list holds a server-scheduled survey, `/surveys/due` is asked
+  /// at this pace (the heartbeat's) in the foreground, and on launch and
+  /// resume.
+  Timer? _duePoll;
+  bool _checkingDue = false;
+
   @override
   void initState() {
     super.initState();
     if (widget.activeSurveys != null) {
       _surveys = List.of(widget.activeSurveys!);
+      _syncDuePolling();
       _evaluateTargeting(Sightpane.maybeClient?.currentRoute);
     } else {
       _fetchSurveys();
@@ -587,7 +601,10 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
     // A survey activated in the dashboard while the app runs shows up without
     // a restart: the list is fetched again on resume, and on a route change
     // once it is a minute old.
-    _lifecycle = AppLifecycleListener(onResume: _fetchSurveys);
+    _lifecycle = AppLifecycleListener(
+      onResume: _fetchSurveys,
+      onPause: _stopDuePolling,
+    );
   }
 
   @override
@@ -595,6 +612,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
     super.didUpdateWidget(oldWidget);
     if (widget.activeSurveys != oldWidget.activeSurveys && widget.activeSurveys != null) {
       _surveys = List.of(widget.activeSurveys!);
+      _syncDuePolling();
       _evaluateTargeting(Sightpane.maybeClient?.currentRoute);
     }
   }
@@ -606,6 +624,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       timer.cancel();
     }
     _delayed.clear();
+    _stopDuePolling();
     _events?.cancel();
     _lifecycle?.dispose();
     Sightpane.maybeClient?.routeNotifier.removeListener(_onRouteChanged);
@@ -624,12 +643,56 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       setState(() {
         _surveys = fetched;
       });
+      _syncDuePolling();
       _evaluateTargeting(client.currentRoute);
     } finally {
       _fetching = false;
       // After a failed fetch too: the list fetched before is still worth
       // checking.
       _evaluatePendingEvents();
+    }
+  }
+
+  bool get _hasServerScheduled =>
+      _surveys?.any((s) => s.active && s.targeting.serverScheduled) ?? false;
+
+  /// Starts asking `/surveys/due` (at once, then at the heartbeat's pace) when
+  /// the list has a server-scheduled survey; stops when it has none.
+  void _syncDuePolling() {
+    _stopDuePolling();
+    final client = Sightpane.maybeClient;
+    if (client == null || !_hasServerScheduled) return;
+    final every = client.options.heartbeatInterval > Duration.zero
+        ? client.options.heartbeatInterval
+        : const Duration(seconds: 20);
+    _duePoll = Timer.periodic(every, (_) => _checkDue());
+    _checkDue();
+  }
+
+  void _stopDuePolling() {
+    _duePoll?.cancel();
+    _duePoll = null;
+  }
+
+  /// Shows the first due survey, whatever page this is, and tells the backend
+  /// it was shown.
+  Future<void> _checkDue() async {
+    final client = Sightpane.maybeClient;
+    if (client == null || !mounted || _checkingDue || _activeSurvey != null) {
+      return;
+    }
+    _checkingDue = true;
+    try {
+      final due = await fetchDueSurveysOrNull(client);
+      if (!mounted || due == null || _activeSurvey != null) return;
+      for (final survey in due) {
+        if (_dismissedOrCompleted.contains(survey.id)) continue;
+        _show(survey);
+        unawaited(markSurveyShown(client, survey.id));
+        break;
+      }
+    } finally {
+      _checkingDue = false;
     }
   }
 
@@ -657,6 +720,17 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   /// on one screen in the foreground: no route change, no resume). Either way
   /// it waits for the fetch and is checked against what comes back.
   void _onEvent(String event) {
+    // The backend times a server-scheduled survey from the stored event, so
+    // send it now rather than at the next flush: the app may not live until
+    // then.
+    final serverTriggered = _surveys?.any(
+          (s) =>
+              s.active &&
+              s.targeting.serverScheduled &&
+              s.targeting.eventTrigger == event,
+        ) ??
+        false;
+    if (serverTriggered) unawaited(Sightpane.maybeClient?.flush());
     final fetchedAt = _fetchedAt;
     final age = fetchedAt == null ? null : clock.now().difference(fetchedAt);
     final stale = age != null && age >= _refreshAfter;
@@ -684,6 +758,8 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       if (!survey.active) continue;
       if (_dismissedOrCompleted.contains(survey.id)) continue;
       if (_delayed.containsKey(survey.id)) continue;
+      // The backend times these; /surveys/due shows them.
+      if (survey.targeting.serverScheduled) continue;
 
       // Event trigger check. An event only shows the surveys waiting for it:
       // the others are shown on navigation, and rolling their sample rate again

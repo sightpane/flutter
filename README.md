@@ -128,6 +128,14 @@ dashboard works like this:
   wait. When the time is up the survey is skipped if the person has left the
   page its URL pattern names, has already dismissed or answered it, or another
   survey is on screen.
+- **Show even if the page changed** (server-scheduled, set in the dashboard;
+  needs an event trigger): the backend times the delay from the stored event,
+  not the device. While the list has such a survey the SDK asks
+  `/surveys/due` on launch, on resume and every `heartbeatInterval` in the
+  foreground, shows what is due on whatever page this is, and reports it shown.
+  It follows the user id to another session or device, and stays due for a day,
+  so a person who closed the app sees it on their next launch. The trigger
+  event is sent at once rather than at the next flush.
 
 The list is fetched again when the app comes back to the foreground, and on
 navigation or a captured event once it is a minute old, so a survey activated in
