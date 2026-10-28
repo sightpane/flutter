@@ -548,8 +548,18 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
 
   /// How old the fetched list may get before a route change fetches it again.
   static const _refreshAfter = Duration(minutes: 1);
+
+  /// With no list at all (the launch fetch failed), how long an event waits
+  /// before it asks again — often enough to recover, not enough to hammer a
+  /// backend that is down.
+  static const _retryAfter = Duration(seconds: 10);
   DateTime? _fetchedAt;
   bool _fetching = false;
+
+  /// Events captured while the list was loading or due a refresh, evaluated
+  /// once it arrives. A set: the same event twice needs one look, and the set
+  /// cannot grow past the app's distinct event names.
+  final Set<String> _pendingEvents = <String>{};
 
   @override
   void initState() {
@@ -601,6 +611,18 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
       _evaluateTargeting(client.currentRoute);
     } finally {
       _fetching = false;
+      // After a failed fetch too: the list fetched before is still worth
+      // checking.
+      _evaluatePendingEvents();
+    }
+  }
+
+  void _evaluatePendingEvents() {
+    if (_pendingEvents.isEmpty) return;
+    final events = List.of(_pendingEvents);
+    _pendingEvents.clear();
+    for (final event in events) {
+      _evaluateTargeting(Sightpane.maybeClient?.currentRoute, event: event);
     }
   }
 
@@ -613,8 +635,24 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
     _evaluateTargeting(route);
   }
 
-  void _onEvent(String event) =>
-      _evaluateTargeting(Sightpane.maybeClient?.currentRoute, event: event);
+  /// An event is only seen once, so it must not be checked against a list
+  /// that is not there yet (captured at launch, before the response) or one
+  /// that predates the survey (activated in the dashboard while the app sits
+  /// on one screen in the foreground: no route change, no resume). Either way
+  /// it waits for the fetch and is checked against what comes back.
+  void _onEvent(String event) {
+    final fetchedAt = _fetchedAt;
+    final age = fetchedAt == null ? null : clock.now().difference(fetchedAt);
+    final stale = age != null && age >= _refreshAfter;
+    // No list although a fetch was tried: the launch fetch failed.
+    final missing = _surveys == null && fetchedAt != null;
+    if (_fetching || stale || missing) {
+      _pendingEvents.add(event);
+      if (!missing || age! >= _retryAfter) _fetchSurveys();
+      return;
+    }
+    _evaluateTargeting(Sightpane.maybeClient?.currentRoute, event: event);
+  }
 
   /// Evaluates targeting rules against current route and event.
   void evaluateTargeting({String? route, String? event}) {
