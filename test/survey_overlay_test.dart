@@ -244,6 +244,101 @@ void main() {
     await Sightpane.close();
   });
 
+  group('a delay after the trigger', () {
+    test('is read from delay_seconds, 0 when absent', () {
+      final s = SightpaneSurvey.fromJson({
+        'id': 7,
+        'type': 'nps',
+        'question': 'q',
+        'targeting': {'event_trigger': 'purchase', 'delay_seconds': 30},
+      });
+      expect(s.targeting.delaySeconds, 30);
+      expect(s.targeting.toJson()['delay_seconds'], 30);
+      expect(const SurveyTargeting().delaySeconds, 0);
+    });
+
+    testWidgets('shows the survey only once the delay has passed', (tester) async {
+      const survey = SightpaneSurvey(
+        id: 'srv_late',
+        name: 'After purchase',
+        type: SurveyType.nps,
+        question: 'How was buying?',
+        targeting: SurveyTargeting(eventTrigger: 'purchase', delaySeconds: 30),
+      );
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SightpaneSurveyOverlay(
+            activeSurveys: [survey],
+            child: Scaffold(body: Text('Shop')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Sightpane.capture('purchase');
+      await tester.pump(const Duration(seconds: 29));
+      expect(find.text('How was buying?'), findsNothing);
+      // The same event again does not restart the wait.
+      Sightpane.capture('purchase');
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('How was buying?'), findsOneWidget);
+
+      await Sightpane.close();
+    });
+
+    testWidgets('a page survey is dropped if the person leaves the page first', (tester) async {
+      const survey = SightpaneSurvey(
+        id: 'srv_page',
+        name: 'Checkout',
+        type: SurveyType.nps,
+        question: 'Easy checkout?',
+        targeting: SurveyTargeting(urlPattern: '/checkout', delaySeconds: 10),
+      );
+      Sightpane.currentRoute = '/checkout';
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SightpaneSurveyOverlay(
+            activeSurveys: [survey],
+            child: Scaffold(body: Text('Shop')),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(seconds: 5));
+      Sightpane.currentRoute = '/home';
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+      expect(find.text('Easy checkout?'), findsNothing);
+
+      await Sightpane.close();
+    });
+
+    testWidgets('a pending delay is cancelled with the overlay', (tester) async {
+      const survey = SightpaneSurvey(
+        id: 'srv_gone',
+        name: 'After purchase',
+        type: SurveyType.nps,
+        question: 'How was buying?',
+        targeting: SurveyTargeting(eventTrigger: 'purchase', delaySeconds: 30),
+      );
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SightpaneSurveyOverlay(
+            activeSurveys: [survey],
+            child: Scaffold(body: Text('Shop')),
+          ),
+        ),
+      );
+      Sightpane.capture('purchase');
+      await tester.pump();
+      // Unmounted mid-wait: a timer left running would fail the test.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 31));
+
+      await Sightpane.close();
+    });
+  });
+
   // The README mounts the overlay in MaterialApp.builder, which puts it beside
   // the Navigator rather than under it: no Overlay above the card's TextField.
   testWidgets('open text survey mounted in MaterialApp.builder can be typed into', (tester) async {

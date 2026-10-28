@@ -32,17 +32,23 @@ class SurveyTargeting {
     this.urlPattern,
     this.eventTrigger,
     this.sampleRate = 1.0,
+    this.delaySeconds = 0,
   });
 
   final String? urlPattern;
   final String? eventTrigger;
   final double sampleRate;
 
+  /// How long to wait after the trigger (the event, or arriving on a matching
+  /// page) before the survey shows; 0 is at once.
+  final int delaySeconds;
+
   factory SurveyTargeting.fromJson(Map<String, dynamic> json) {
     return SurveyTargeting(
       urlPattern: json['url_pattern'] as String?,
       eventTrigger: json['event_trigger'] as String?,
       sampleRate: (json['sample_rate'] as num?)?.toDouble() ?? 1.0,
+      delaySeconds: (json['delay_seconds'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -50,6 +56,7 @@ class SurveyTargeting {
     if (urlPattern != null) 'url_pattern': urlPattern,
     if (eventTrigger != null) 'event_trigger': eventTrigger,
     'sample_rate': sampleRate,
+    if (delaySeconds > 0) 'delay_seconds': delaySeconds,
   };
 
   bool matchesRoute(String? route) {
@@ -561,6 +568,11 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   /// cannot grow past the app's distinct event names.
   final Set<String> _pendingEvents = <String>{};
 
+  /// Surveys whose trigger fired and whose delay is still running, by id. A
+  /// survey waiting here is not triggered again, so repeating the event does
+  /// not restart its wait.
+  final Map<String, Timer> _delayed = <String, Timer>{};
+
   @override
   void initState() {
     super.initState();
@@ -590,6 +602,10 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
   @override
   void dispose() {
     _dismissTimer?.cancel();
+    for (final timer in _delayed.values) {
+      timer.cancel();
+    }
+    _delayed.clear();
     _events?.cancel();
     _lifecycle?.dispose();
     Sightpane.maybeClient?.routeNotifier.removeListener(_onRouteChanged);
@@ -667,6 +683,7 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
     for (final survey in _surveys!) {
       if (!survey.active) continue;
       if (_dismissedOrCompleted.contains(survey.id)) continue;
+      if (_delayed.containsKey(survey.id)) continue;
 
       // Event trigger check. An event only shows the surveys waiting for it:
       // the others are shown on navigation, and rolling their sample rate again
@@ -690,14 +707,39 @@ class SightpaneSurveyOverlayState extends State<SightpaneSurveyOverlay> {
         }
       }
 
-      // Trigger this survey!
-      setState(() {
-        _activeSurvey = survey;
-        _visible = true;
-        _submitted = false;
-      });
+      final delay = survey.targeting.delaySeconds;
+      if (delay > 0) {
+        _delayed[survey.id] = Timer(
+          Duration(seconds: delay),
+          () => _showDelayed(survey),
+        );
+        break;
+      }
+      _show(survey);
       break;
     }
+  }
+
+  void _show(SightpaneSurvey survey) {
+    setState(() {
+      _activeSurvey = survey;
+      _visible = true;
+      _submitted = false;
+    });
+  }
+
+  /// The delay is over: show the survey if it still makes sense. It does not
+  /// if the person has left the page it targets, has dismissed or answered it
+  /// meanwhile, or another survey is on screen — the same rule as an event
+  /// that arrives while a card is showing.
+  void _showDelayed(SightpaneSurvey survey) {
+    _delayed.remove(survey.id);
+    if (!mounted || _activeSurvey != null) return;
+    if (_dismissedOrCompleted.contains(survey.id)) return;
+    if (!survey.targeting.matchesRoute(Sightpane.maybeClient?.currentRoute)) {
+      return;
+    }
+    _show(survey);
   }
 
   void _handleDismiss() {
